@@ -4,7 +4,7 @@ This repository will be used to organize and store all project-related materials
 Supervisor: 
 Safaa Bedawi
 
-Group Members:
-Cameron Bodkin-Dick
-Sandy Alzabadani
-Eric Cui
+Group Members:  
+Cameron Bodkin-Dick  
+Sandy Alzabadani  
+Eric Cui  
