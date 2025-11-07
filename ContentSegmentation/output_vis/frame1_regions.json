@@ -1,0 +1,134 @@
+[
+  {
+    "bbox": [
+      918,
+      213,
+      75,
+      58
+    ],
+    "label": "text",
+    "confidence": 0.796,
+    "text_preview": "50",
+    "status": "new"
+  },
+  {
+    "bbox": [
+      1004,
+      212,
+      41,
+      41
+    ],
+    "label": "text",
+    "confidence": 0.725,
+    "text_preview": "%",
+    "status": "new"
+  },
+  {
+    "bbox": [
+      1092,
+      210,
+      30,
+      44
+    ],
+    "label": "text",
+    "confidence": 0.961,
+    "text_preview": "B",
+    "status": "new"
+  },
+  {
+    "bbox": [
+      479,
+      155,
+      158,
+      154
+    ],
+    "label": "diagram",
+    "confidence": 0.6,
+    "text_preview": "$$",
+    "status": "new"
+  },
+  {
+    "bbox": [
+      330,
+      152,
+      113,
+      118
+    ],
+    "label": "diagram",
+    "confidence": 0.597,
+    "text_preview": "$}$",
+    "status": "new"
+  },
+  {
+    "bbox": [
+      80,
+      142,
+      224,
+      119
+    ],
+    "label": "diagram",
+    "confidence": 0.541,
+    "text_preview": "In\u2192",
+    "status": "new"
+  },
+  {
+    "bbox": [
+      1080,
+      139,
+      56,
+      45
+    ],
+    "label": "text",
+    "confidence": 0.866,
+    "text_preview": "W",
+    "status": "new"
+  },
+  {
+    "bbox": [
+      734,
+      131,
+      133,
+      66
+    ],
+    "label": "text",
+    "confidence": 0.918,
+    "text_preview": "Predo",
+    "status": "new"
+  },
+  {
+    "bbox": [
+      920,
+      128,
+      117,
+      69
+    ],
+    "label": "text",
+    "confidence": 0.918,
+    "text_preview": "50%",
+    "status": "new"
+  },
+  {
+    "bbox": [
+      77,
+      60,
+      703,
+      63
+    ],
+    "label": "text",
+    "confidence": 0.859,
+    "text_preview": "Hardness t Color Uncorelated",
+    "status": "new"
+  },
+  {
+    "bbox": [
+      593,
+      8,
+      59,
+      16
+    ],
+    "label": "diagram",
+    "confidence": 0.0,
+    "text_preview": "",
+    "status": "new"
+  }
+]
