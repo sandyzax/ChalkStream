@@ -9,7 +9,9 @@
     "label": "text",
     "confidence": 0.796,
     "text_preview": "50",
-    "status": "new"
+    "status": "new",
+    "timestamp": "2025-11-10 14:13:53.838",
+    "ocr_time_s": 0.182
   },
   {
     "bbox": [
@@ -21,7 +23,9 @@
     "label": "text",
     "confidence": 0.725,
     "text_preview": "%",
-    "status": "new"
+    "status": "new",
+    "timestamp": "2025-11-10 14:13:54.022",
+    "ocr_time_s": 0.03
   },
   {
     "bbox": [
@@ -33,7 +37,9 @@
     "label": "text",
     "confidence": 0.961,
     "text_preview": "B",
-    "status": "new"
+    "status": "new",
+    "timestamp": "2025-11-10 14:13:54.056",
+    "ocr_time_s": 0.031
   },
   {
     "bbox": [
@@ -45,7 +51,9 @@
     "label": "diagram",
     "confidence": 0.6,
     "text_preview": "$$",
-    "status": "new"
+    "status": "new",
+    "timestamp": "2025-11-10 14:13:54.092",
+    "ocr_time_s": 0.035
   },
   {
     "bbox": [
@@ -57,7 +65,9 @@
     "label": "diagram",
     "confidence": 0.597,
     "text_preview": "$}$",
-    "status": "new"
+    "status": "new",
+    "timestamp": "2025-11-10 14:13:54.130",
+    "ocr_time_s": 0.04
   },
   {
     "bbox": [
@@ -69,7 +79,9 @@
     "label": "diagram",
     "confidence": 0.541,
     "text_preview": "In\u2192",
-    "status": "new"
+    "status": "new",
+    "timestamp": "2025-11-10 14:13:54.175",
+    "ocr_time_s": 0.062
   },
   {
     "bbox": [
@@ -81,7 +93,9 @@
     "label": "text",
     "confidence": 0.866,
     "text_preview": "W",
-    "status": "new"
+    "status": "new",
+    "timestamp": "2025-11-10 14:13:54.241",
+    "ocr_time_s": 0.032
   },
   {
     "bbox": [
@@ -93,7 +107,9 @@
     "label": "text",
     "confidence": 0.918,
     "text_preview": "Predo",
-    "status": "new"
+    "status": "new",
+    "timestamp": "2025-11-10 14:13:54.278",
+    "ocr_time_s": 0.032
   },
   {
     "bbox": [
@@ -105,7 +121,9 @@
     "label": "text",
     "confidence": 0.918,
     "text_preview": "50%",
-    "status": "new"
+    "status": "new",
+    "timestamp": "2025-11-10 14:13:54.313",
+    "ocr_time_s": 0.035
   },
   {
     "bbox": [
@@ -117,7 +135,9 @@
     "label": "text",
     "confidence": 0.859,
     "text_preview": "Hardness t Color Uncorelated",
-    "status": "new"
+    "status": "new",
+    "timestamp": "2025-11-10 14:13:54.353",
+    "ocr_time_s": 0.173
   },
   {
     "bbox": [
@@ -129,6 +149,8 @@
     "label": "diagram",
     "confidence": 0.0,
     "text_preview": "",
-    "status": "new"
+    "status": "new",
+    "timestamp": "2025-11-10 14:13:54.531",
+    "ocr_time_s": 0.05
   }
 ]

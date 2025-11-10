@@ -9,7 +9,9 @@
     "label": "text",
     "confidence": 0.796,
     "text_preview": "50",
-    "status": "existing"
+    "status": "existing",
+    "timestamp": "2025-11-10 14:13:54.637",
+    "ocr_time_s": 0.033
   },
   {
     "bbox": [
@@ -21,7 +23,9 @@
     "label": "text",
     "confidence": 0.725,
     "text_preview": "%",
-    "status": "existing"
+    "status": "existing",
+    "timestamp": "2025-11-10 14:13:54.674",
+    "ocr_time_s": 0.032
   },
   {
     "bbox": [
@@ -33,7 +37,9 @@
     "label": "text",
     "confidence": 0.961,
     "text_preview": "B",
-    "status": "existing"
+    "status": "existing",
+    "timestamp": "2025-11-10 14:13:54.710",
+    "ocr_time_s": 0.032
   },
   {
     "bbox": [
@@ -45,7 +51,9 @@
     "label": "diagram",
     "confidence": 0.6,
     "text_preview": "$$",
-    "status": "existing"
+    "status": "existing",
+    "timestamp": "2025-11-10 14:13:54.748",
+    "ocr_time_s": 0.034
   },
   {
     "bbox": [
@@ -57,7 +65,9 @@
     "label": "diagram",
     "confidence": 0.597,
     "text_preview": "$}$",
-    "status": "existing"
+    "status": "existing",
+    "timestamp": "2025-11-10 14:13:54.785",
+    "ocr_time_s": 0.035
   },
   {
     "bbox": [
@@ -69,7 +79,9 @@
     "label": "diagram",
     "confidence": 0.541,
     "text_preview": "In\u2192",
-    "status": "existing"
+    "status": "existing",
+    "timestamp": "2025-11-10 14:13:54.825",
+    "ocr_time_s": 0.068
   },
   {
     "bbox": [
@@ -81,7 +93,9 @@
     "label": "text",
     "confidence": 0.866,
     "text_preview": "W",
-    "status": "existing"
+    "status": "existing",
+    "timestamp": "2025-11-10 14:13:54.898",
+    "ocr_time_s": 0.033
   },
   {
     "bbox": [
@@ -93,7 +107,9 @@
     "label": "text",
     "confidence": 0.918,
     "text_preview": "Predo",
-    "status": "existing"
+    "status": "existing",
+    "timestamp": "2025-11-10 14:13:54.934",
+    "ocr_time_s": 0.033
   },
   {
     "bbox": [
@@ -105,7 +121,9 @@
     "label": "text",
     "confidence": 0.918,
     "text_preview": "50%",
-    "status": "existing"
+    "status": "existing",
+    "timestamp": "2025-11-10 14:13:54.970",
+    "ocr_time_s": 0.03
   },
   {
     "bbox": [
@@ -117,7 +135,9 @@
     "label": "text",
     "confidence": 0.859,
     "text_preview": "Hardness t Color Uncorelated",
-    "status": "existing"
+    "status": "existing",
+    "timestamp": "2025-11-10 14:13:55.005",
+    "ocr_time_s": 0.089
   },
   {
     "bbox": [
@@ -129,6 +149,8 @@
     "label": "diagram",
     "confidence": 0.0,
     "text_preview": "",
-    "status": "existing"
+    "status": "existing",
+    "timestamp": "2025-11-10 14:13:55.100",
+    "ocr_time_s": 0.034
   }
 ]

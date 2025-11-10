@@ -1,3 +1,5 @@
+from datetime import datetime
+import time
 import cv2
 import os
 import json
@@ -47,7 +49,7 @@ class Segmenter:
         # Create a PaddleOCR text recognizer based on model type
         print(f"[INFO] Loading PaddleOCR model ({self.model_name}) ...")
         model_type = f"PP-OCRv5_{'server' if self.use_server_mode else 'mobile'}_rec"
-        recognizer = TextRecognition(model_name=model_type)
+        recognizer = TextRecognition(model_name=model_type, device= "gpu")
         print(f"[INFO] OCR model loaded successfully.")
         return recognizer
 
@@ -144,19 +146,39 @@ class Segmenter:
         return results
 
     def _ocr_single_region(self, img, box, status):
-        # Run OCR inference on one cropped region
+        # Run OCR inference on one cropped region and log timing details
         x, y, w, h = box
         crop = img[y:y+h, x:x+w]
         tmp_path = "_tmp_crop.png"
         cv2.imwrite(tmp_path, crop)
+
+        start_time = time.perf_counter()
+        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
+
         try:
             output = self.recognizer.predict(input=tmp_path)
+            elapsed = time.perf_counter() - start_time
+
+            # Parse recognition result
             result = output[0] if isinstance(output[0], dict) else vars(output[0])
             text = result.get("rec_text", "")
             conf = result.get("rec_score", 0.0)
+
+            # Determine label and console message based on confidence
+            label_message = text[:20] + " with text" if conf > 0.625 else "diagram no text"
+
+            print(
+                f"[{timestamp}] [INFO] OCR region ({x},{y},{w},{h}) "
+                f"took {elapsed:.3f}s | conf={conf:.3f} | {label_message}"
+            )
         except Exception as e:
-            print(f"[ERROR] OCR failed on region ({x}, {y}, {w}, {h}): {e}")
+            elapsed = time.perf_counter() - start_time
+            print(
+                f"[{timestamp}] [ERROR] OCR failed ({x},{y},{w},{h}) "
+                f"after {elapsed:.3f}s: {e}"
+            )
             text, conf = "", 0.0
+
         finally:
             if os.path.exists(tmp_path):
                 os.remove(tmp_path)
@@ -167,7 +189,9 @@ class Segmenter:
             "label": label,
             "confidence": round(conf, 3),
             "text_preview": text,
-            "status": status
+            "status": status,
+            "timestamp": timestamp,
+            "ocr_time_s": round(elapsed, 3)
         }
 
     def _score_regions(self, img, boxes, status="new"):
