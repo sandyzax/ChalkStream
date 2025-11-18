@@ -10,8 +10,8 @@
     "confidence": 0.796,
     "text_preview": "50",
     "status": "existing",
-    "timestamp": "2025-11-10 14:13:54.637",
-    "ocr_time_s": 0.033
+    "timestamp": "2025-11-10 18:39:21.138",
+    "ocr_time_s": 0.027
   },
   {
     "bbox": [
@@ -24,8 +24,8 @@
     "confidence": 0.725,
     "text_preview": "%",
     "status": "existing",
-    "timestamp": "2025-11-10 14:13:54.674",
-    "ocr_time_s": 0.032
+    "timestamp": "2025-11-10 18:39:21.167",
+    "ocr_time_s": 0.026
   },
   {
     "bbox": [
@@ -38,8 +38,8 @@
     "confidence": 0.961,
     "text_preview": "B",
     "status": "existing",
-    "timestamp": "2025-11-10 14:13:54.710",
-    "ocr_time_s": 0.032
+    "timestamp": "2025-11-10 18:39:21.194",
+    "ocr_time_s": 0.027
   },
   {
     "bbox": [
@@ -52,8 +52,8 @@
     "confidence": 0.6,
     "text_preview": "$$",
     "status": "existing",
-    "timestamp": "2025-11-10 14:13:54.748",
-    "ocr_time_s": 0.034
+    "timestamp": "2025-11-10 18:39:21.224",
+    "ocr_time_s": 0.033
   },
   {
     "bbox": [
@@ -66,8 +66,8 @@
     "confidence": 0.597,
     "text_preview": "$}$",
     "status": "existing",
-    "timestamp": "2025-11-10 14:13:54.785",
-    "ocr_time_s": 0.035
+    "timestamp": "2025-11-10 18:39:21.259",
+    "ocr_time_s": 0.033
   },
   {
     "bbox": [
@@ -80,8 +80,8 @@
     "confidence": 0.541,
     "text_preview": "In\u2192",
     "status": "existing",
-    "timestamp": "2025-11-10 14:13:54.825",
-    "ocr_time_s": 0.068
+    "timestamp": "2025-11-10 18:39:21.294",
+    "ocr_time_s": 0.033
   },
   {
     "bbox": [
@@ -94,8 +94,8 @@
     "confidence": 0.866,
     "text_preview": "W",
     "status": "existing",
-    "timestamp": "2025-11-10 14:13:54.898",
-    "ocr_time_s": 0.033
+    "timestamp": "2025-11-10 18:39:21.329",
+    "ocr_time_s": 0.026
   },
   {
     "bbox": [
@@ -108,8 +108,8 @@
     "confidence": 0.918,
     "text_preview": "Predo",
     "status": "existing",
-    "timestamp": "2025-11-10 14:13:54.934",
-    "ocr_time_s": 0.033
+    "timestamp": "2025-11-10 18:39:21.357",
+    "ocr_time_s": 0.036
   },
   {
     "bbox": [
@@ -122,8 +122,8 @@
     "confidence": 0.918,
     "text_preview": "50%",
     "status": "existing",
-    "timestamp": "2025-11-10 14:13:54.970",
-    "ocr_time_s": 0.03
+    "timestamp": "2025-11-10 18:39:21.394",
+    "ocr_time_s": 0.037
   },
   {
     "bbox": [
@@ -136,8 +136,8 @@
     "confidence": 0.859,
     "text_preview": "Hardness t Color Uncorelated",
     "status": "existing",
-    "timestamp": "2025-11-10 14:13:55.005",
-    "ocr_time_s": 0.089
+    "timestamp": "2025-11-10 18:39:21.435",
+    "ocr_time_s": 0.078
   },
   {
     "bbox": [
@@ -150,7 +150,7 @@
     "confidence": 0.0,
     "text_preview": "",
     "status": "existing",
-    "timestamp": "2025-11-10 14:13:55.100",
-    "ocr_time_s": 0.034
+    "timestamp": "2025-11-10 18:39:21.515",
+    "ocr_time_s": 0.03
   }
 ]

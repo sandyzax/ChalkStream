@@ -1,10 +1,16 @@
 from datetime import datetime
+
 import time
 import cv2
 import os
 import json
 import tarfile
 import urllib.request
+import paddle
+print(paddle.version.cuda())
+print(paddle.device.is_compiled_with_cuda())
+print(paddle.device.get_device())
+
 from paddleocr import TextRecognition
 
 # Constants defining segmentation thresholds and morphological grouping rules
@@ -49,7 +55,7 @@ class Segmenter:
         # Create a PaddleOCR text recognizer based on model type
         print(f"[INFO] Loading PaddleOCR model ({self.model_name}) ...")
         model_type = f"PP-OCRv5_{'server' if self.use_server_mode else 'mobile'}_rec"
-        recognizer = TextRecognition(model_name=model_type, device= "gpu")
+        recognizer = TextRecognition(model_name=model_type, device= "gpu:1")
         print(f"[INFO] OCR model loaded successfully.")
         return recognizer
 

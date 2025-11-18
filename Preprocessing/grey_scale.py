@@ -6,7 +6,7 @@ while True:
     ret, frame = cap.read()
     if not ret:
         break
-
+ 
     gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
 
     cv2.imshow('Grayscale', gray)

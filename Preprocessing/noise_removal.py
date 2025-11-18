@@ -7,9 +7,9 @@ This script remove noises
 def run():
     cap = cv2.VideoCapture("Test2.mp4")
     fgbg = cv2.createBackgroundSubtractorMOG2(
-        history=500, 
-        varThreshold=25,    
-        detectShadows=False  
+        history=500,
+        varThreshold=25,
+        detectShadows=False
     )
     mp_selfie_segmentation = mp.solutions.selfie_segmentation.SelfieSegmentation(model_selection=0)
 
