@@ -6,6 +6,7 @@ import json
 import tarfile
 import urllib.request
 from paddleocr import TextRecognition
+import numpy
 
 # Constants defining segmentation thresholds and morphological grouping rules
 
@@ -259,11 +260,10 @@ class Segmenter:
             new_bbox = [x, y, w, h]
             matched_region = None
 
-            # Try to match with a previous region using IoU
+            # --- Try to match with previous regions via IoU ---
             for prev in self.prev_regions:
                 px, py, pw, ph = prev["bbox"]
 
-                # IoU
                 inter_x1 = max(x, px)
                 inter_y1 = max(y, py)
                 inter_x2 = min(x + w, px + pw)
@@ -271,30 +271,50 @@ class Segmenter:
                 inter_w = max(0, inter_x2 - inter_x1)
                 inter_h = max(0, inter_y2 - inter_y1)
                 inter_area = inter_w * inter_h
-                union_area = (w * h) + (pw * ph) - inter_area
+                union_area = (w*h) + (pw*ph) - inter_area
                 iou = inter_area / union_area if union_area > 0 else 0
 
                 if iou > (1 - self.epsilon):
                     matched_region = prev
                     break
-                
-            # Case 1: New Region, Always OCR
+
+            # --- CASE 1: Brand new region (first appearance) ---
             if matched_region is None:
-                result = self._ocr_single_region(img, new_bbox, status="new")
-                result["last_ocr_time"] = now
-                results.append(result)
+                results.append({
+                    "bbox": new_bbox,
+                    "label": "unconfirmed",   # no OCR yet
+                    "confidence": 0.0,
+                    "text_preview": "",
+                    "status": "new",
+                    "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f")[:-3],
+                    "ocr_time_s": 0.0,
+                    "last_ocr_time": 0,
+                    "age": 1               # <-- mark as newborn region
+                })
                 continue
 
-            # Case 2: Existing Region, may skip OCR
+            # --- CASE 2: Region persists from last frame ---
+            age = matched_region.get("age", 1) + 1
 
-            # check visual change
+            # If region is still too young (<2 frames), DO NOT OCR
+            if age < 2:
+                out = matched_region.copy()
+                out["bbox"] = new_bbox
+                out["age"] = age
+                out["status"] = "existing"
+                results.append(out)
+                continue
+
+            # --- At this point, region is stable (age ≥ 2), eligible for OCR ---
+            old_crop = img[
+                matched_region["bbox"][1]: matched_region["bbox"][1] + matched_region["bbox"][3],
+               matched_region["bbox"][0]: matched_region["bbox"][0] + matched_region["bbox"][2]
+           ]
+            new_crop = img[y:y+h, x:x+w]
+
+            # Visual-change detection
             changed = False
             try:
-                old_crop = img[
-                    matched_region["bbox"][1] : matched_region["bbox"][1] + matched_region["bbox"][3],
-                    matched_region["bbox"][0] : matched_region["bbox"][0] + matched_region["bbox"][2]
-                ]
-                new_crop = img[y:y+h, x:x+w]
                 diff = cv2.absdiff(cv2.resize(old_crop, (w, h)), new_crop)
                 if diff.mean() > CHANGE_THRESHOLD:
                     changed = True
@@ -303,20 +323,22 @@ class Segmenter:
 
             elapsed = now - matched_region.get("last_ocr_time", 0)
 
-            # Decide whether to OCR again
+            # Decide whether to OCR this frame
             if changed or elapsed >= OCR_INTERVAL:
-                # Re-run OCR
                 result = self._ocr_single_region(img, new_bbox, status="existing")
                 result["last_ocr_time"] = now
+                result["age"] = age
+                results.append(result)
             else:
-                # Skip OCR → reuse previous detection
-                result = matched_region.copy()
-                result["bbox"] = new_bbox
-                result["status"] = "existing"
-
-            results.append(result)
+                # reuse old OCR result
+                out = matched_region.copy()
+                out["bbox"] = new_bbox
+                out["status"] = "existing"
+                out["age"] = age
+                results.append(out)
 
         return results
+
 
     def _ocr_single_region(self, img, box, status):
         # Run OCR inference on one cropped region and log timing details
@@ -337,15 +359,9 @@ class Segmenter:
             text = result.get("rec_text", "")
             conf = result.get("rec_score", 0.0)
 
-            # Determine label and console message based on confidence
-            label_message = "Text: " + text[:128] if conf > 0.625 else "Diagram"
-
-            print(
-                f"[{timestamp}] [INFO] OCR region ({x},{y},{w},{h}) "
-                f"took {elapsed:.3f}s | conf={conf:.3f} | {label_message}"
-            )
         except Exception as e:
             elapsed = time.perf_counter() - start_time
+            text, conf = "", 0.0
             print(
                 f"[{timestamp}] [ERROR] OCR failed ({x},{y},{w},{h}) "
                 f"after {elapsed:.3f}s: {e}"
@@ -356,7 +372,13 @@ class Segmenter:
             if os.path.exists(tmp_path):
                 os.remove(tmp_path)
 
-        label = self._classify(text, conf)
+        label = self._classify(text, conf, crop=crop)
+
+        print(
+            f"[{timestamp}] [INFO] OCR region ({x},{y},{w},{h}) "
+            f"took {elapsed:.3f}s | label={label} | conf={conf:.3f} | text=\"{text[:64]}\""
+        )
+        
         return {
             "bbox": [x, y, w, h],
             "label": label,
@@ -371,12 +393,18 @@ class Segmenter:
         # Run OCR on all regions with a uniform status (used for first frame)
         return [self._ocr_single_region(img, b, status) for b in boxes]
 
-    def _classify(self, text, conf):
+    def _classify(self, text, conf, crop = None):
         # Lightweight content classifier based on recognized text and confidence
-        if any(sym in text for sym in ["=", "+", "-", "∫", "√", "π", "Σ"]):
+        if any(sym in text for sym in ["=", "+", "-", "∫", "√", "π", "Σ", "/"]):
             return "equation"
-        if conf > 0.65:
+        
+        if crop is not None:
+            if self._detect_fraction_bar(crop):
+                return "equation"
+        
+        if conf > 0.6:
             return "text"
+        
         return "diagram"
 
     def _visualize(self, img, regions):
@@ -406,4 +434,46 @@ class Segmenter:
         with open(path, "w") as f:
             json.dump(data, f, indent=2)
         print(f"[INFO] Saved {len(data)} regions to {path}")
+
+
+    def _detect_fraction_bar(self, crop):
+        """
+        Detects a horizontal fraction bar using probabilistic Hough transform.
+        Works for handwritten fractions like 5/15, 1/3, etc.
+        """
+
+        gray = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY)
+        blur = cv2.GaussianBlur(gray, (3, 3), 0)
+
+        # edge detection
+        edges = cv2.Canny(blur, 40, 120)
+
+        h, w = edges.shape
+
+        # Hough line detection
+        lines = cv2.HoughLinesP(
+            edges,
+            rho=1,
+            theta=numpy.pi / 180,
+            threshold=20,
+            minLineLength=int(w * 0.45),   # bar must cover at least 45% of width
+            maxLineGap=10                  # small gaps allowed
+        )
+
+        if lines is None:
+            return False
+
+        # Check for horizontal-ish lines
+        for x1, y1, x2, y2 in lines[:, 0]:
+            length = numpy.hypot(x2 - x1, y2 - y1)
+            slope = abs((y2 - y1) / (x2 - x1 + 1e-6))
+
+            if slope < 0.15 and length > w * 0.40:
+                # OPTIONAL: ensure line is near vertical center
+                mid_y = (y1 + y2) / 2
+                if h * 0.15 < mid_y < h * 0.85:
+                    return True
+
+        return False
+
 
