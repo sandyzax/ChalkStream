@@ -23,18 +23,18 @@ def run(video_path: str = "preprocessing/Test3.mp4"):
     if not ok:
         raise FileNotFoundError(f"Could not read video: {video_path}")
 
-    # ---- STEP 1: USER SELECTS CORNERS ----
+    # Step 1: User selects board corners
     print("[INFO] Select board corners...")
     corners = select_board_corners(first_frame)
     if corners is None:
         print("[INFO] Corner selection aborted.")
         return
 
-    # ---- STEP 2: INIT SEGMENTER ----
-    seg = Segmenter(use_server_mode=False)
+    # Step 2: Initialize segmentation
+    seg = Segmenter(use_english_model= True)
     os.makedirs("segmentation/output_vis", exist_ok=True)
 
-    # ---- STEP 2.1: INIT noise_removal (your existing logic)
+    # Step 2.1: Initialize noise_removal 
     first_warped = warp_board(first_frame, corners)
     noise_removal.previous_frame = first_warped.copy()
 
@@ -43,7 +43,8 @@ def run(video_path: str = "preprocessing/Test3.mp4"):
     last_filter_time = 0
     last_filtered_frame = None
     last_vis = None
-    INTERVAL = 0.5   # → 2 FPS
+    NOISE_INTERVAL = 1/10  # 10 FPS max
+    SEGMENT_INTERVAL = 1/2   # 2 FPS
 
     # Step 3: Process video frames
     while True:
@@ -56,7 +57,7 @@ def run(video_path: str = "preprocessing/Test3.mp4"):
 
         # Apply professor-filter logic and throttle professor filtering to interval
         now = time.time()
-        if now - last_filter_time >= INTERVAL:
+        if now - last_filter_time >= NOISE_INTERVAL:
             prof_filtered = noise_removal(warped)
             last_filtered_frame = prof_filtered
             last_filter_time = now
@@ -67,7 +68,7 @@ def run(video_path: str = "preprocessing/Test3.mp4"):
 
         # Throttle segmentation interval
         now = time.time()
-        if now - last_seg_time >= INTERVAL:
+        if now - last_seg_time >= SEGMENT_INTERVAL:
             vis = seg.segment_array(
                 prof_filtered,
                 save_json=f"segmentation/output_vis/frame0.json",
@@ -78,9 +79,9 @@ def run(video_path: str = "preprocessing/Test3.mp4"):
         else:
             vis = last_vis if last_vis is not None else prof_filtered
 
-        # ---- STEP 4: SHOW VISUALIZATION LIVE ----
+        # Step 4: Show visualization live
         cv2.imshow("ChalkStream Segmentation", vis)
-        if cv2.waitKey(1) & 0xFF == 27:  # ESC to stop
+        if cv2.waitKey(1) & 0xFF == 27:  # ESC
             break
 
         frame_idx += 1

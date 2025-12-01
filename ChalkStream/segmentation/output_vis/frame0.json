@@ -1,170 +1,122 @@
 [
   {
     "bbox": [
-      147,
-      895,
-      31,
-      41
+      831,
+      830,
+      109,
+      70
     ],
     "label": "diagram",
     "confidence": 0.0,
     "text_preview": "",
     "status": "new",
-    "timestamp": "2025-11-24 19:39:07.332",
-    "ocr_time_s": 0.039
+    "timestamp": "2025-12-01 16:37:36.531",
+    "ocr_time_s": 0.026,
+    "last_ocr_time": 1764625056.5309305
   },
   {
     "bbox": [
-      53,
-      874,
-      53,
-      62
-    ],
-    "label": "diagram",
-    "confidence": 0.0,
-    "text_preview": "",
-    "status": "existing",
-    "timestamp": "2025-11-24 19:39:07.375",
-    "ocr_time_s": 0.041
-  },
-  {
-    "bbox": [
-      162,
-      853,
-      29,
-      36
-    ],
-    "label": "diagram",
-    "confidence": 0.0,
-    "text_preview": "",
-    "status": "existing",
-    "timestamp": "2025-11-24 19:39:07.420",
-    "ocr_time_s": 0.04
-  },
-  {
-    "bbox": [
-      738,
-      802,
-      135,
-      121
-    ],
-    "label": "diagram",
-    "confidence": 0.0,
-    "text_preview": "",
-    "status": "existing",
-    "timestamp": "2025-11-24 19:39:07.465",
-    "ocr_time_s": 0.044
-  },
-  {
-    "bbox": [
-      886,
-      785,
-      123,
-      138
-    ],
-    "label": "diagram",
-    "confidence": 0.08,
-    "text_preview": "\u798f",
-    "status": "new",
-    "timestamp": "2025-11-24 19:39:07.515",
-    "ocr_time_s": 0.042
-  },
-  {
-    "bbox": [
-      302,
-      765,
       79,
-      49
+      307,
+      90,
+      150
     ],
     "label": "diagram",
-    "confidence": 0.116,
-    "text_preview": "\u6d77",
-    "status": "existing",
-    "timestamp": "2025-11-24 19:39:07.561",
-    "ocr_time_s": 0.041
-  },
-  {
-    "bbox": [
-      637,
-      757,
-      23,
-      59
-    ],
-    "label": "diagram",
-    "confidence": 0.0,
-    "text_preview": "",
-    "status": "existing",
-    "timestamp": "2025-11-24 19:39:07.607",
-    "ocr_time_s": 0.044
-  },
-  {
-    "bbox": [
-      0,
-      527,
-      14,
-      233
-    ],
-    "label": "diagram",
-    "confidence": 0.0,
-    "text_preview": "",
+    "confidence": 0.117,
+    "text_preview": "N",
     "status": "new",
-    "timestamp": "2025-11-24 19:39:07.655",
-    "ocr_time_s": 0.042
+    "timestamp": "2025-12-01 16:37:36.560",
+    "ocr_time_s": 0.024,
+    "last_ocr_time": 1764625056.5309305
   },
   {
     "bbox": [
-      330,
-      144,
-      64,
-      52
+      17,
+      239,
+      502,
+      28
     ],
-    "label": "text",
-    "confidence": 0.993,
-    "text_preview": "15",
+    "label": "diagram",
+    "confidence": 0.295,
+    "text_preview": "2000 0000000000 071 3200",
     "status": "existing",
-    "timestamp": "2025-11-24 19:39:07.701",
-    "ocr_time_s": 0.042
+    "timestamp": "2025-12-01 16:37:33.427",
+    "ocr_time_s": 0.19,
+    "last_ocr_time": 1764625053.4262211
   },
   {
     "bbox": [
-      82,
-      117,
-      99,
-      76
-    ],
-    "label": "text",
-    "confidence": 0.919,
-    "text_preview": "15",
-    "status": "existing",
-    "timestamp": "2025-11-24 19:39:07.747",
-    "ocr_time_s": 0.043
-  },
-  {
-    "bbox": [
-      322,
-      62,
-      233,
-      78
+      246,
+      106,
+      33,
+      22
     ],
     "label": "equation",
-    "confidence": 0.497,
-    "text_preview": "5\u00b7-",
+    "confidence": 0.412,
+    "text_preview": "=",
     "status": "existing",
-    "timestamp": "2025-11-24 19:39:07.795",
-    "ocr_time_s": 0.042
+    "timestamp": "2025-12-01 16:37:35.999",
+    "ocr_time_s": 0.025,
+    "last_ocr_time": 1764625055.965147
   },
   {
     "bbox": [
-      104,
-      47,
-      70,
-      62
+      673,
+      62,
+      108,
+      131
+    ],
+    "label": "diagram",
+    "confidence": 0.402,
+    "text_preview": "\\",
+    "status": "existing",
+    "timestamp": "2025-12-01 16:37:33.930",
+    "ocr_time_s": 0.029,
+    "last_ocr_time": 1764625053.9281006
+  },
+  {
+    "bbox": [
+      321,
+      55,
+      229,
+      136
     ],
     "label": "text",
-    "confidence": 0.962,
-    "text_preview": "5",
+    "confidence": 0.859,
+    "text_preview": "15\u00f75",
     "status": "existing",
-    "timestamp": "2025-11-24 19:39:07.842",
-    "ocr_time_s": 0.041
+    "timestamp": "2025-12-01 16:37:33.626",
+    "ocr_time_s": 0.026,
+    "last_ocr_time": 1764625053.4262211
+  },
+  {
+    "bbox": [
+      87,
+      44,
+      95,
+      139
+    ],
+    "label": "text",
+    "confidence": 0.899,
+    "text_preview": "55",
+    "status": "existing",
+    "timestamp": "2025-12-01 16:37:32.598",
+    "ocr_time_s": 0.024,
+    "last_ocr_time": 1764625052.3976243
+  },
+  {
+    "bbox": [
+      579,
+      40,
+      118,
+      176
+    ],
+    "label": "equation",
+    "confidence": 0.431,
+    "text_preview": "-[",
+    "status": "existing",
+    "timestamp": "2025-12-01 16:37:33.655",
+    "ocr_time_s": 0.028,
+    "last_ocr_time": 1764625053.4262211
   }
 ]

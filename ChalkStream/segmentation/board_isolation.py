@@ -29,10 +29,8 @@ def auto_detect_board_corners(bgr):
     for cnt in contours:
         area = cv2.contourArea(cnt)
 
-        # Reject too small or too large
-        if area < frame_area * 0.05:  # too small
-            continue
-        if area > frame_area * 0.80:  # too large = whole image
+        # Reject too small
+        if area < frame_area * 0.2:
             continue
 
         # Approximate polygon
