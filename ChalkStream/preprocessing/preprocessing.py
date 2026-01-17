@@ -21,64 +21,33 @@ def board_resize(frame):
 
 # noise removal:
 fgbg = cv2.createBackgroundSubtractorMOG2(
-        history=150,
-        varThreshold=12,
+        history=50,
+        varThreshold=25,
         detectShadows=False
     )
 mp_selfie_segmentation = mp.solutions.selfie_segmentation.SelfieSegmentation(model_selection=0)
 
 def noise_removal(frame):
-    """Remove professor + movement using Mediapipe + improved masks + fill-in."""
-
-    h, w = frame.shape[:2]
-
     #filter out people
     rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
     result = mp_selfie_segmentation.process(rgb)
+    mask = cv2.bitwise_not((result.segmentation_mask > 0.4).astype('uint8') * 255)
+    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (18,18))
+    shrunk_mask = cv2.erode(mask, kernel, iterations=1)
+    people_filtered = cv2.bitwise_and(frame, frame, mask=shrunk_mask)
 
-    # Raw person mask (1 = person, 0 = background)
-    mp_mask = (result.segmentation_mask > 0.25).astype('uint8') * 255
+    #filter out movements
+    fgmask = fgbg.apply(people_filtered)
+    kernel2 = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (18,18))
+    shrunk_mask2 = cv2.dilate(fgmask, kernel2, iterations=1)
+    bgmask = cv2.bitwise_not(shrunk_mask2)
+    movement_filtered = cv2.bitwise_and(people_filtered, people_filtered, mask=bgmask)
 
-    k = int(h * 0.04)  # Kernel ≈ 4% of board height
-    if k % 2 == 0:
-        k += 1
+    filtered_out_area = cv2.bitwise_or(shrunk_mask2,cv2.bitwise_not(shrunk_mask))
+    filtered_out_area = cv2.cvtColor(filtered_out_area, cv2.COLOR_GRAY2BGR)
 
-    person_kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (k, k))
-    person_mask = cv2.dilate(mp_mask, person_kernel, iterations=1)
-
-    # Remove the person from the frame
-    no_person = cv2.bitwise_and(frame, frame, mask=cv2.bitwise_not(person_mask))
-
-    # 3. Motion Filtering (IMPROVED MOG2)
-    fgmask = fgbg.apply(no_person)            # moving regions = white
-    bgmask = cv2.bitwise_not(fgmask)          # stable regions = white
-
-    # Remove only moving pixels
-    static_only = cv2.bitwise_and(no_person, no_person, mask=bgmask)
-
-    # 4. Removal mask for inpainting
-    #    Areas to be filled:
-    #       - person_mask (person is standing here)
-    #       - fgmask (movement here)
-    removal_mask = cv2.bitwise_or(person_mask, fgmask)
-    removal_mask = cv2.cvtColor(removal_mask, cv2.COLOR_GRAY2BGR)
-
-    # Invert to get clean, stable regions
-    clean_mask = cv2.bitwise_not(removal_mask)
-
-    # 5. Intpainting (prev frame)
-    # Initialize previous frame if first call
-    if not hasattr(noise_removal, "previous_frame") or noise_removal.previous_frame is None:
-        noise_removal.previous_frame = frame.copy()
-
-    clean_area = cv2.bitwise_and(static_only, clean_mask)
-    restored_area = cv2.bitwise_and(noise_removal.previous_frame, removal_mask)
-
-    final_image = cv2.bitwise_or(clean_area, restored_area)
-
-    # Save for next frame
-    noise_removal.previous_frame = final_image.copy()
-
+    final_image = cv2.bitwise_or(movement_filtered,cv2.bitwise_and(noise_removal.previous_frame,filtered_out_area))
+    noise_removal.previous_frame = final_image
     return final_image
 
 # grey scale

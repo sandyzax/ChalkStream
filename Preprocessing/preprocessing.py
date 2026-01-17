@@ -23,7 +23,7 @@ def board_resize(frame):
 fgbg = cv2.createBackgroundSubtractorMOG2(
         history=500,
         varThreshold=25,
-        detectShadows=False
+        detectShadows=True
     )
 mp_selfie_segmentation = mp.solutions.selfie_segmentation.SelfieSegmentation(model_selection=0)
 
