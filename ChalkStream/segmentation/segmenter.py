@@ -7,6 +7,7 @@ import tarfile
 import urllib.request
 from paddleocr import TextRecognition
 import numpy
+from diagram_vectorization.content_presentation import Content, ContentType
 
 # Constants defining segmentation thresholds and morphological grouping rules
 
@@ -43,6 +44,18 @@ class Segmenter:
 
         self._ensure_model()        # Ensure the model exists locally (download if missing)
         self.recognizer = self._load_recognizer()  # Load PaddleOCR recognizer instance
+
+
+    def segment_regions_only(self, img):
+        """
+        Return only bounding boxes for regions.
+        No OCR. No cropping. No NumPy arrays.
+        Output: list of (x, y, w, h)
+        """
+        binary = self._preprocess(img)
+        regions = self._find_regions(binary, img.shape)
+        return regions
+
 
     def _ensure_model(self):
         # Download and extract OCR model if not already cached
@@ -107,6 +120,18 @@ class Segmenter:
             cv2.imwrite(output_img, vis)
 
         return scored
+
+    def segment_dict_to_content_record(seg, content_id):
+        return Content(
+            id=content_id,
+            bbox=seg["bbox"],
+            content_type=ContentType.DIAGRAM,  # forced for now
+            confidence=seg.get("confidence", 0.0),
+            text_preview=seg.get("text_preview", ""),
+            status=seg.get("status", "new"),
+            timestamp=seg["timestamp"],
+        )
+
 
     def segment_array(self, img, save_json=None, save_vis=None):
         if img is None:
