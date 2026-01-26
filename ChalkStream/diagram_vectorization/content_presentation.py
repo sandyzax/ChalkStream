@@ -3,6 +3,7 @@ from typing import Any, Dict, List, Optional
 from dataclasses import dataclass
 import numpy as np
 import cv2
+import math
 
 
 class ContentType(Enum):
@@ -128,6 +129,7 @@ class ContentLoad:
         print("xxx ",len(updated_contents))
         self.contents = updated_contents
 
+    
     def create_content(self,content,content_type:ContentType,position:tuple)->Content:
         h, w = content.shape[:2]
 
@@ -147,6 +149,118 @@ class ContentLoad:
             background[y:y+h, x:x+w] = img
         cv2.imshow("Result", background)
         cv2.waitKey(0)
+
+def draw_text_in_bbox(
+        canvas,
+        text: str,
+        bbox,                       # (x,y,w,h)
+        *,
+        font=cv2.FONT_HERSHEY_SIMPLEX,
+        height_fill=0.70,           # % of bbox height to target for font height
+        margin_frac=0.08,           # % of bbox min(w,h) for padding
+        min_scale=0.25,
+        max_scale=3.0,
+        thickness_at_scale=1.2,     # thickness ≈ thickness_at_scale * scale
+        line_spacing=1.15,          # multiplier on line height
+        wrap=True,
+    ):
+        x, y, w, h = map(int, bbox)
+        if w <= 2 or h <= 2:
+            return
+
+        text = (text or "").strip()
+        if not text:
+            return
+
+        # Padding
+        pad = int(max(1, margin_frac * min(w, h)))
+        x0, y0 = x + pad, y + pad
+        x1, y1 = x + w - pad, y + h - pad
+        avail_w = max(1, x1 - x0)
+        avail_h = max(1, y1 - y0)
+
+        # ---- 1) Start with a scale based on bbox height ----
+        # OpenCV text height is not 1:1 with scale; we estimate from a probe.
+        probe = "Ag"
+        (probe_w, probe_h), probe_base = cv2.getTextSize(probe, font, 1.0, 1)
+        target_h_px = max(1, int(avail_h * height_fill))
+        scale_h = target_h_px / max(1, probe_h)
+
+        # ---- 2) Also constrain by width (string length) ----
+        # Measure the actual string width at scale 1 and shrink/grow to fit.
+        (tw1, th1), base1 = cv2.getTextSize(text, font, 1.0, 1)
+        scale_w = avail_w / max(1, tw1)
+
+        # Choose the tighter of the two so it fits both height + width
+        scale = max(min_scale, min(max_scale, min(scale_h, scale_w)))
+
+        # Thickness linked to scale
+        thickness = max(1, int(round(thickness_at_scale * scale)))
+
+        def measure(s, sc):
+            (tw, th), base = cv2.getTextSize(s, font, sc, thickness)
+            return tw, th, base
+
+        # ---- 3) Optional wrapping if it still won't fit or if it's long ----
+        lines = [text]
+        if wrap:
+            # Greedy word-wrap to fit width
+            words = text.split()
+            if len(words) >= 2:
+                lines = []
+                cur = words[0]
+                for w_i in words[1:]:
+                    candidate = cur + " " + w_i
+                    cand_w, _, _ = measure(candidate, scale)
+                    if cand_w <= avail_w:
+                        cur = candidate
+                    else:
+                        lines.append(cur)
+                        cur = w_i
+                lines.append(cur)
+
+            # If still too wide (e.g. one very long token), fall back to char wrapping
+            fixed = []
+            for ln in lines:
+                ln_w, _, _ = measure(ln, scale)
+                if ln_w <= avail_w:
+                    fixed.append(ln)
+                    continue
+                # char wrap
+                chunk = ""
+                for ch in ln:
+                    cand = chunk + ch
+                    cand_w, _, _ = measure(cand, scale)
+                    if cand_w <= avail_w or not chunk:
+                        chunk = cand
+                    else:
+                        fixed.append(chunk)
+                        chunk = ch
+                if chunk:
+                    fixed.append(chunk)
+            lines = fixed
+
+        # ---- 4) If wrapped into multiple lines, ensure total height fits ----
+        _, line_h, line_base = measure("Ag", scale)
+        step = int(math.ceil(line_h * line_spacing))
+        total_h = step * len(lines)
+
+        if total_h > avail_h:
+            # shrink scale to make vertical fit
+            shrink = avail_h / max(1, total_h)
+            scale = max(min_scale, scale * shrink)
+            thickness = max(1, int(round(thickness_at_scale * scale)))
+            _, line_h, _ = measure("Ag", scale)
+            step = int(math.ceil(line_h * line_spacing))
+
+        # ---- 5) Draw, top-left anchored inside bbox ----
+        # Put first baseline a bit below the top padding.
+        baseline_y = y0 + line_h
+        for i, ln in enumerate(lines):
+            yy = baseline_y + i * step
+            if yy > y1:  # stop if out of box
+                break
+            cv2.putText(canvas, ln, (x0, yy), font, scale, (0, 0, 0), thickness, cv2.LINE_AA)
 
 def test1():
     overlay = cv2.imread("input.png")

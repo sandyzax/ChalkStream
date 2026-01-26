@@ -48,6 +48,19 @@ class Timer:
         print(f"[TIMING] {label:30s}  stage={dt*1000:9.2f} ms   total={total*1000:9.2f} ms")
         self.last = now
 
+# -----------------------------
+# Helper: offset ROI-local polylines into full-frame coords
+# -----------------------------
+def offset_polylines_to_global(polylines_local, x0: int, y0: int):
+    out = []
+    for poly in polylines_local:
+        out_poly = []
+        for pt in poly:
+            out_poly.append([float(x0 + pt[0]), float(y0 + pt[1])])
+        out.append(out_poly)
+    return out
+
+
 def ink_mask_from_roi_bgr(roi_bgr: np.ndarray) -> np.ndarray:
     """
     Convert a region crop (BGR) into a binary ink mask (0/1).
