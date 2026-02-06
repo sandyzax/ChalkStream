@@ -2,10 +2,10 @@ import cv2
 import numpy as np
 
 pts = np.array([
-    [101, 86],  # top-left      [0]
-    [538, 87],  # top-right     [1]
-    [539,297],  # bottom-right  [2]
-    [103,303]   # bottom-left   [3]
+    [143, 154],  # top-left      [0]
+    [580, 52],  # top-right     [1]
+    [789,286],  # bottom-right  [2]
+    [324,423]   # bottom-left   [3]
 ], dtype="float32")
 
 widthA = np.linalg.norm(pts[3] - pts[2])
@@ -24,7 +24,9 @@ dst = np.array([
 ], dtype="float32")
 
 M = cv2.getPerspectiveTransform(pts, dst)
-img = cv2.imread("input.jpg")
+img = cv2.imread("g.jpg")
 warp = cv2.warpPerspective(img, M, (maxWidth, maxHeight))
 
 cv2.imshow('Grayscale', warp)
+
+cv2.imwrite("output.jpg", warp)
