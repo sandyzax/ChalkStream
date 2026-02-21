@@ -8,7 +8,7 @@ from segmentation.board_isolation import warp_board
 from segmentation.segmenter import Segmenter
 
 
-def run(video_path: str = "pipeline/Test3.mp4"):
+def run_orchestrator(corners,gui,video_path: str = "pipeline/Test3.mp4"):
     """
     Full pipeline:
     1. Load video.
@@ -23,12 +23,12 @@ def run(video_path: str = "pipeline/Test3.mp4"):
     if not ok:
         raise FileNotFoundError(f"Could not read video: {video_path}")
 
-    # Step 1: User selects board corners
-    print("[INFO] Select board corners...")
-    corners = select_board_corners(first_frame)
-    if corners is None:
-        print("[INFO] Corner selection aborted.")
-        return
+    # # Step 1: User selects board corners
+    # print("[INFO] Select board corners...")
+    # corners = select_board_corners(first_frame)
+    # if corners is None:
+    #     print("[INFO] Corner selection aborted.")
+    #     return
 
     # Step 2: Initialize segmentation
     seg = Segmenter(use_english_model= True)

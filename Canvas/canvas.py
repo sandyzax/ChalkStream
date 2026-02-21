@@ -1,4 +1,5 @@
 import sys
+import subprocess
 from PySide6.QtCore import QPointF
 from PySide6.QtWidgets import (
     QApplication,
@@ -118,8 +119,6 @@ class CanvasView(QGraphicsView):
         Preload images into canvas
         """
 
-        
-
         id,content, x, y = data
         pixmap = cv2_to_qpixmap(content)
 
@@ -133,6 +132,29 @@ class CanvasView(QGraphicsView):
         else: #Updating Old Contents
             item = self.contents[id]
             item.update_pixmap(pixmap)
+
+    def remove_image(self, item_id:int):
+        """
+        Remove an image item by ID
+        """
+
+        if item_id not in self.contents:
+            print(f"[remove_image] ID not found: {item_id}")
+            return False
+
+        item = self.contents[item_id]
+
+        # Remove from scene
+        self.scene.removeItem(item)
+
+        # Explicit delete (good practice)
+        item.setParentItem(None)
+        del item
+
+        # Remove from dict
+        del self.contents[item_id]
+
+        return True
 
 
 
@@ -148,41 +170,64 @@ class MainWindow(QMainWindow):
         self.setCentralWidget(self.view)
 
         self.resize(dimension_x, dimension_y)
-        # Start simulation timer
-        self.timer = QTimer(self)
-        self.timer.timeout.connect(self.simulate_update)
-        self.timer.start(1500) 
-        self.counter = 0
 
-    def simulate_update(self):
-        if self.counter:
-            image2 = cv2.imread("image2.png")
-            data2 = (2,image2,500,300)
-            self.view.load_images(data2)
-            self.counter = 0
-        else:
-            image3 = cv2.imread("image3.png")
-            data3 = (2,image3,500,300)
-            self.view.load_images(data3)
-            self.counter = 1
+
+
+from PySide6.QtCore import QObject, Signal, Slot, QThread
+import cv2
+
+
+
+class Worker(QObject):
+    load_content = Signal(tuple)
+    remove_content = Signal(tuple)
+    x = 0
+    y = 0
+
+    @Slot()
+    def run(self):
+        image1 = cv2.imread("input.jpg")
+        image2 = cv2.imread("image2.png")
+        image3 = cv2.imread("image3.png")
+        data1 = (1,image1,100,100)
+        data2 = (2,image2,500,300)
+        data3 = (2,image3,500,300)
+        self.load_content.emit(data1)
+        self.load_content.emit(data2)
+        # for i in range(10):
+        #     time.sleep(1)
+        #     if i%2:
+        #         self.load_content.emit(data2)
+        #     else:
+        #         self.load_content.emit(data3)
+        self.remove_content.emit(1)
+
+
+
+def run_gui(x,y):
+    app = QApplication(sys.argv)
+    win = MainWindow(x, y)
+
+    thread = QThread()
+    worker = Worker()
+
+    worker.moveToThread(thread)
+
+    thread.started.connect(worker.run)
+    worker.load_content.connect(win.view.load_images)
+    worker.remove_content.connect(win.view.remove_image)
+
+
+    thread.start()
+
+    win.show()
+    sys.exit(app.exec())
+    
+
 
 
 if __name__ == "__main__":
 
-    app = QApplication(sys.argv)
-
-    win = MainWindow(1000,800)
-    win.show()
-    image1 = cv2.imread("input.jpg")
-    image2 = cv2.imread("image2.png")
-    image3 = cv2.imread("image3.png")
-    data1 = (1,image1,100,100)
-    data2 = (2,image2,500,300)
-    data3 = (2,image3,500,300)
-
-    win.view.load_images(data1)
-    win.view.load_images(data2)
-    
-    sys.exit(app.exec())
+    run_gui(1000,800)
     
         

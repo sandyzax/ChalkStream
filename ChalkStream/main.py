@@ -1,8 +1,8 @@
 """
 Entrypoint for ChalkStream: drive orchestration
 """
-from pipeline.orchestrator import run
+from canvas.canvas import run_gui
 
 
 if __name__ == "__main__":
-    run()
+    run_gui(enable_gui=False)
