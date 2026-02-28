@@ -300,6 +300,7 @@ def run1(video_path: any = 0):
     user_requested_exit = False
 
     while True:
+        
         ret, frame, frame_no = next_frame(cap, is_live, frame_period, playback_t0, frame_no)
         if not ret:
             break
