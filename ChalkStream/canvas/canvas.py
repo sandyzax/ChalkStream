@@ -5,13 +5,16 @@ from PySide6.QtWidgets import (
     QApplication,
     QGraphicsView,
     QGraphicsScene,
+    QGraphicsTextItem,
     QGraphicsPixmapItem,
     QMainWindow,
     QWidget,
     QPushButton,
     QLabel,
     QVBoxLayout,
-    QHBoxLayout
+    QHBoxLayout,
+    QGraphicsTextItem,
+    QLineEdit
 )
 import cv2
 from PySide6.QtGui import QPainter
@@ -102,6 +105,7 @@ class CanvasView(QGraphicsView):
         self.contents = {}
         self.paused = False
         self.queued_elements = []
+        self.removed_elements_id = []
 
 
     def replace_image(self, item_id, new_content):
@@ -110,8 +114,6 @@ class CanvasView(QGraphicsView):
             print("Unknown ID:", item_id)
             return
         
-        
-
         item = self.contents[item_id]
 
         item.update_pixmap(new_content)
@@ -120,6 +122,8 @@ class CanvasView(QGraphicsView):
         """
         Preload images into canvas
         """
+        if data[0] in self.removed_elements_id:
+            return
         if self.paused:
             self.queued_elements.append(data)
             return
@@ -155,6 +159,7 @@ class CanvasView(QGraphicsView):
         item.setParentItem(None)
         del item
         del self.contents[item_id]
+        self.removed_elements_id.append(item_id)
 
         return True
     
@@ -168,6 +173,20 @@ class CanvasView(QGraphicsView):
                     self.load_images(item)
             self.queued_elements = []
 
+    def remove_selected(self):
+        selected_items = self.scene.selectedItems()
+        for item in selected_items:
+            self.remove_image(item.item_id)
+
+    def add_elements(self,element):
+        if isinstance(element,str):
+            text_item = QGraphicsTextItem(element)
+            text_item.setFlag(QGraphicsTextItem.ItemIsSelectable, True)
+
+            text_item.setFlag(QGraphicsTextItem.ItemIsMovable, True)
+            text_item.setPos(50,50)
+            self.scene.addItem(text_item)
+        pass
 
 
 class MainWindow(QMainWindow):
@@ -177,6 +196,7 @@ class MainWindow(QMainWindow):
 
         self.setWindowTitle("Board")
 
+        #Main interface
         central_widget = QWidget()
         self.setCentralWidget(central_widget)
         main_layout = QHBoxLayout()
@@ -186,15 +206,25 @@ class MainWindow(QMainWindow):
         self.view.setFixedSize(dimension_x ,dimension_y)
         main_layout.addWidget(self.view)
 
+        #Buttons 
         button_panel = QWidget()
         button_layout = QVBoxLayout()
         button_panel.setLayout(button_layout)
-        pause_button = QPushButton("P")
-        btn2 = QPushButton("A")
-        pause_button.clicked.connect(self.pause)
-        btn2.clicked.connect(self.screenshot)
-        button_layout.addWidget(pause_button)
-        button_layout.addWidget(btn2)
+
+        self.pause_button = QPushButton("Pause")
+        self.pause_button.clicked.connect(self.pause)
+        button_layout.addWidget(self.pause_button)
+
+        remove = QPushButton("Remove Selected")
+        remove.clicked.connect(self.remove_selected)
+        button_layout.addWidget(remove)
+
+        self.add_word_textbox = QLineEdit()
+        button_layout.addWidget(self.add_word_textbox)
+
+        add_text = QPushButton("Add Text")
+        add_text.clicked.connect(self.add_text)
+        button_layout.addWidget(add_text)
         button_layout.addStretch()
 
         main_layout.addWidget(button_panel) 
@@ -204,23 +234,29 @@ class MainWindow(QMainWindow):
     def pause(self):
         self.view.pause()
         if self.view.paused:
-            self.pause_button.setText("R")
+            self.pause_button.setText("Resume")
         else:
-            self.pause_button.setText("P")
+            self.pause_button.setText("Pause")
 
+    def remove_selected(self):
+        self.view.remove_selected()
 
-    def screenshot(self):
-        pass
+    def add_text(self):
+        text = self.add_word_textbox.text()
+        self.view.add_elements(text)
 
     
+if __name__ == "__main__":
+    app = QApplication(sys.argv)
+    win = MainWindow(1200, 800)
 
+    win.show()
+    sys.exit(app.exec())   
 
 
 from PySide6.QtCore import QObject, Signal, Slot, QThread
 import cv2
 from pipeline.orchestrator import run_orchestrator
-
-
 
 class Worker(QObject):
     finished = Signal()
@@ -239,22 +275,20 @@ class Worker(QObject):
         image1 = cv2.imread("input.jpg")
         image2 = cv2.imread("image2.png")
         image3 = cv2.imread("image3.png")
-        data1 = (1,image1,100,100)
+        data1 = (2,image1,100,100)
         data2 = (2,image2,500,300)
-        data3 = (2,image3,500,300)
-        self.load_content.emit(data1)
-        self.load_content.emit(data2)
-        time.sleep(5)
-        self.remove_content.emit(1)
+        data3 = (1,image3,500,300)
         self.load_content.emit(data3)
-        # for i in range(20):
-        #     time.sleep(1)
-        #     if not i%3:
-        #         self.load_content.emit(data2)
-        #     elif not (i-1)%3:
-        #         self.load_content.emit(data1)
-        #     else:
-        #         self.load_content.emit(data3)
+        self.load_content.emit(data2)
+        # time.sleep(5)
+        # self.remove_content.emit(1)
+        # self.load_content.emit(data3)
+        for i in range(20):
+            time.sleep(1)
+            if not i%2:
+                self.load_content.emit(data2)
+            else:
+                self.load_content.emit(data1)
 
 import numpy as np
 from preprocessing.corner_selection import select_board_corners
@@ -302,10 +336,9 @@ def run_gui(video_path: str = "pipeline/Test3.mp4",enable_gui = True):
     else:
         print("Waiting")
         thread.finished.connect(app.quit)
-        app.exec()   # run the event loop until app.quit() is called
+        app.exec()   
         print("Quitting")
         sys.exit()
-    
     
 
 
