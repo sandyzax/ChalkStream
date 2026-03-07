@@ -1,22 +1,43 @@
-from canvas import run, load_image
+import io
+import matplotlib.pyplot as plt
 
-import cv2
-import time
+from PySide6.QtGui import QPixmap
+from PySide6.QtWidgets import QGraphicsPixmapItem
 
-run()
-time.sleep(0.5)
-image1 = cv2.imread("input.jpg")
-image2 = cv2.imread("image2.png")
-image3 = cv2.imread("image3.png")
-data1 = (1,image1,100,100)
-data2 = (2,image2,500,300)
-data3 = (2,image3,500,300)
 
-load_image(data1)
-load_image(data2)
+class LatexGraphicsItem(QGraphicsPixmapItem):
+    def __init__(self, latex, parent=None):
+        pixmap = self.render_latex(latex)
+        super().__init__(pixmap, parent)
 
-for i in range(10):
-    if i%2:
-        load_image(data3)
-    else:
-        load_image(data2)
+        # make it behave like QGraphicsTextItem
+        self.setFlags(
+            QGraphicsPixmapItem.ItemIsMovable |
+            QGraphicsPixmapItem.ItemIsSelectable 
+        )
+
+    def render_latex(self, latex):
+        fig = plt.figure()
+        fig.text(0, 0, f"${latex}$")
+
+        buffer = io.BytesIO()
+        fig.savefig(buffer, format="png", bbox_inches="tight", pad_inches=0)
+        plt.close(fig)
+
+        pixmap = QPixmap()
+        pixmap.loadFromData(buffer.getvalue())
+        return pixmap
+
+from PySide6.QtWidgets import QApplication, QGraphicsScene, QGraphicsView
+
+app = QApplication([])
+
+scene = QGraphicsScene()
+
+latex_item = LatexGraphicsItem(r"\frac{a^2 + b^2}{c}")
+scene.addItem(latex_item)
+
+view = QGraphicsView(scene)
+view.show()
+
+app.exec()

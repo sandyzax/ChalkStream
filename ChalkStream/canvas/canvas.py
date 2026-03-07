@@ -3,6 +3,7 @@ import subprocess
 from PySide6.QtCore import QPointF
 from PySide6.QtWidgets import (
     QApplication,
+    QGraphicsItem,
     QGraphicsView,
     QGraphicsScene,
     QGraphicsTextItem,
@@ -17,54 +18,16 @@ from PySide6.QtWidgets import (
     QLineEdit
 )
 import cv2
+import numpy as np
 from PySide6.QtGui import QPainter
 from PySide6.QtGui import QImage, QPixmap
 from PySide6.QtCore import Qt, QTimer
+import matplotlib.pyplot as plt
 
 import time
 
-class ImageItem(QGraphicsPixmapItem):
-
-    def __init__(self, item_id, pixmap, scene):
-        super().__init__(pixmap)
-
-        self.scene_ref = scene
-        self.item_id = item_id
-
-        self.setFlags(
-            QGraphicsPixmapItem.ItemIsMovable |
-            QGraphicsPixmapItem.ItemIsSelectable |
-            QGraphicsPixmapItem.ItemSendsGeometryChanges
-        )
-
-
-    def itemChange(self, change, value):
-
-        if change == QGraphicsPixmapItem.ItemPositionChange and self.scene():
-
-            new_pos = value
-
-            scene_rect = self.scene().sceneRect()
-            item_rect = self.boundingRect()
-
-            left = scene_rect.left()
-            top = scene_rect.top()
-            right = scene_rect.right() - item_rect.width()
-            bottom = scene_rect.bottom() - item_rect.height()
-
-            x = min(max(new_pos.x(), left), right)
-            y = min(max(new_pos.y(), top), bottom)
-
-            return QPointF(x, y)
-
-        return super().itemChange(change, value)
-    
-    def update_pixmap(self, new_pixmap):
-
-        old_pos = self.pos()
-        self.setPixmap(new_pixmap)
-        self.setPos(old_pos)
-
+import matplotlib.mathtext as mathtext
+import io
 
 def cv2_to_qpixmap(cv_img):
     """
@@ -86,8 +49,88 @@ def cv2_to_qpixmap(cv_img):
         bytes_per_line,
         QImage.Format_RGB888
     )
-
     return QPixmap.fromImage(qimage)
+
+
+parser = mathtext.MathTextParser("path")
+def is_valid_latex(expr):
+    try:
+        parser.parse(expr)
+        return True
+    except Exception:
+        return False
+
+class ImageItem(QGraphicsPixmapItem):
+
+    def __init__(self, item_id, image, scene):
+        pixmap = cv2_to_qpixmap(image)
+        super().__init__(pixmap)
+
+        self.scene_ref = scene
+        self.item_id = item_id
+
+        self.setFlags(
+            QGraphicsPixmapItem.ItemIsMovable |
+            QGraphicsPixmapItem.ItemIsSelectable |
+            QGraphicsPixmapItem.ItemSendsGeometryChanges
+        )
+
+    
+    def update_content(self, new_pixmap):
+
+        old_pos = self.pos()
+        self.setPixmap(new_pixmap)
+        self.setPos(old_pos)
+
+class TextItem(QGraphicsTextItem):
+    def __init__(self, item_id, text,size = 16) -> None:
+        super().__init__(text)
+        self.item_id = item_id
+
+        self.setFlags(
+            QGraphicsPixmapItem.ItemIsMovable |
+            QGraphicsPixmapItem.ItemIsSelectable 
+        )
+        font = self.font()
+        font.setPointSize(size)
+        self.setFont(font)
+
+    def update_content(self, new_text):
+
+        old_pos = self.pos()
+        self.setPlainText(new_text)
+        self.setPos(old_pos)
+
+class LatexItem(QGraphicsPixmapItem):
+    def __init__(self, item_id, latex, size = 1, parent=None):
+        pixmap = self.render_latex(latex,size)
+        super().__init__(pixmap, parent)
+        self.item_id = item_id
+        self.latex_value = latex
+
+        # make it behave like QGraphicsTextItem
+        self.setFlags(
+            QGraphicsPixmapItem.ItemIsMovable |
+            QGraphicsPixmapItem.ItemIsSelectable 
+        )
+
+    def render_latex(self, latex,size = 16):
+        fig = plt.figure(dpi=size*40)
+        fig.text(0, 0, f"${latex}$")
+
+        buffer = io.BytesIO()
+        fig.savefig(buffer, format="png", bbox_inches="tight", pad_inches=0)
+        plt.close(fig)
+
+        pixmap = QPixmap()
+        pixmap.loadFromData(buffer.getvalue())
+        return pixmap
+
+    def update_content(self, latex):
+        old_pos = self.pos()
+        new_pixmap = self.render_latex(latex)
+        self.setPixmap(new_pixmap)
+        self.setPos(old_pos)
 
 class CanvasView(QGraphicsView):
 
@@ -116,31 +159,40 @@ class CanvasView(QGraphicsView):
         
         item = self.contents[item_id]
 
-        item.update_pixmap(new_content)
+        item.update_content(new_content)
     
-    def load_images(self,data):
+    def load_images(self,data:dict):
         """
         Preload images into canvas
         """
-        if data[0] in self.removed_elements_id:
+        if data["id"] in self.removed_elements_id:
             return
         if self.paused:
             self.queued_elements.append(data)
             return
 
-        id,content, x, y = data
-        pixmap = cv2_to_qpixmap(content)
-
-        if id not in self.contents: 
-            scene_rect = self.scene.sceneRect()
-            item = ImageItem(id,pixmap, scene_rect)
-            item.setPos(x, y)
-            self.scene.addItem(item)
-            self.contents[id] = item
+        
+        if data["id"] not in self.contents: 
+            if data["type"] == "image":
+                scene_rect = self.scene.sceneRect()
+                item = ImageItem(data["id"],data["content"], scene_rect)
+                item.setPos(data["x"], data["y"])
+                self.scene.addItem(item)
+                self.contents[data["id"]] = item
+            elif data["type"] == "text":
+                item = TextItem(data["id"],data["content"],data["size"] if data["size"] else 16)
+                item.setPos(data["x"], data["y"])
+                self.scene.addItem(item)
+                self.contents[data["id"]] = item
+            elif data["type"] == "latex":
+                item = LatexItem(data["id"],data["content"],data["size"] if data["size"] else 16)
+                item.setPos(data["x"], data["y"])
+                self.scene.addItem(item)
+                self.contents[data["id"]] = item
 
         else: 
-            item = self.contents[id]
-            item.update_pixmap(pixmap)
+            item = self.contents[data["id"]]
+            item.update_content(data["content"])
 
     def remove_image(self, item_id:int):
         """
@@ -176,7 +228,10 @@ class CanvasView(QGraphicsView):
     def remove_selected(self):
         selected_items = self.scene.selectedItems()
         for item in selected_items:
-            self.remove_image(item.item_id)
+            if item.item_id >= 0:
+                self.remove_image(item.item_id)
+            else:
+                self.scene.removeItem(item)
 
     def add_elements(self,element):
         if isinstance(element,str):
@@ -185,9 +240,13 @@ class CanvasView(QGraphicsView):
 
             text_item.setFlag(QGraphicsTextItem.ItemIsMovable, True)
             text_item.setPos(50,50)
-            self.scene.addItem(text_item)
-        pass
 
+            font = text_item.font()
+            font.setPointSize(20)
+            text_item.setFont(font)
+            text_item.item_id = -1
+            self.scene.addItem(text_item)
+        
 
 class MainWindow(QMainWindow):
 
@@ -249,7 +308,20 @@ class MainWindow(QMainWindow):
 if __name__ == "__main__":
     app = QApplication(sys.argv)
     win = MainWindow(1200, 800)
-
+    image1 = cv2.imread("input.jpg")
+    image2 = cv2.imread("image2.png")
+    image3 = cv2.imread("image3.png")
+    data1 = {"id":1,"type":"image","content":image1,"x":200,"y":300}
+    data2 = {"id":2,"type":"image","content":image2,"x":200,"y":600}
+    data3 = {"id":3,"type":"image","content":image3,"x":800,"y":300}
+    data4 = {"id":4,"type":"text","content":"Hello World","size":16,"x":800,"y":500}
+    data5 = {"id":5,"type":"latex","content":r"\frac{a}{b}","size":10,"x":800,"y":500}
+    
+    win.view.load_images(data1)
+    win.view.load_images(data2)
+    win.view.load_images(data3)
+    win.view.load_images(data4)
+    win.view.load_images(data5)
     win.show()
     sys.exit(app.exec())   
 
@@ -275,9 +347,9 @@ class Worker(QObject):
         image1 = cv2.imread("input.jpg")
         image2 = cv2.imread("image2.png")
         image3 = cv2.imread("image3.png")
-        data1 = (2,image1,100,100)
-        data2 = (2,image2,500,300)
-        data3 = (1,image3,500,300)
+        data1 = {"id":3,"content":image1,"x":200,"y":300}
+        data2 = {"id":2,"content":image2,"x":200,"y":300}
+        data3 = {"id":1,"content":image3,"x":800,"y":300}
         self.load_content.emit(data3)
         self.load_content.emit(data2)
         # time.sleep(5)
@@ -290,7 +362,7 @@ class Worker(QObject):
             else:
                 self.load_content.emit(data1)
 
-import numpy as np
+
 from preprocessing.corner_selection import select_board_corners
 
 def run_gui(video_path: str = "pipeline/Test3.mp4",enable_gui = True):

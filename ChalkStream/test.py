@@ -1,68 +1,43 @@
-import sys
-from PySide6.QtWidgets import (
-    QApplication,
-    QMainWindow,
-    QWidget,
-    QPushButton,
-    QLabel,
-    QVBoxLayout,
-    QHBoxLayout
-)
+import io
+import matplotlib.pyplot as plt
+
+from PySide6.QtGui import QPixmap
+from PySide6.QtWidgets import QGraphicsPixmapItem
 
 
-class MainWindow(QMainWindow):
-    def __init__(self):
-        super().__init__()
-        self.setWindowTitle("Right Side Button Panel")
+class LatexGraphicsItem(QGraphicsPixmapItem):
+    def __init__(self, latex, parent=None):
+        pixmap = self.render_latex(latex)
+        super().__init__(pixmap, parent)
 
-        # Central widget
-        central_widget = QWidget()
-        self.setCentralWidget(central_widget)
+        # make it behave like QGraphicsTextItem
+        self.setFlags(
+            QGraphicsPixmapItem.ItemIsMovable |
+            QGraphicsPixmapItem.ItemIsSelectable 
+        )
 
-        # Main horizontal layout
-        main_layout = QHBoxLayout()
-        central_widget.setLayout(main_layout)
+    def render_latex(self, latex):
+        fig = plt.figure()
+        fig.text(0, 0, f"${latex}$")
 
-        # --------------------
-        # LEFT: Main content
-        # --------------------
-        content_widget = QWidget()
-        content_layout = QVBoxLayout()
-        content_widget.setLayout(content_layout)
+        buffer = io.BytesIO()
+        fig.savefig(buffer, format="png", bbox_inches="tight", pad_inches=0)
+        plt.close(fig)
 
-        self.label = QLabel("Main Content Area")
-        content_layout.addWidget(self.label)
+        pixmap = QPixmap()
+        pixmap.loadFromData(buffer.getvalue())
+        return pixmap
 
-        # --------------------
-        # RIGHT: Button panel
-        # --------------------
-        button_panel = QWidget()
-        button_layout = QVBoxLayout()
-        button_panel.setLayout(button_layout)
+from PySide6.QtWidgets import QApplication, QGraphicsScene, QGraphicsView
 
-        btn1 = QPushButton("Action 1")
-        btn2 = QPushButton("Action 2")
+app = QApplication([])
 
-        btn1.clicked.connect(self.action1)
-        btn2.clicked.connect(self.action2)
+scene = QGraphicsScene()
 
-        button_layout.addWidget(btn1)
-        button_layout.addWidget(btn2)
-        button_layout.addStretch()  # pushes buttons to top
+latex_item = LatexGraphicsItem(r"\frac{a^2 + b^2}{c}")
+scene.addItem(latex_item)
 
-        # Add both sections to main layout
-        main_layout.addWidget(content_widget, 5)  # stretch factor 3
-        main_layout.addWidget(button_panel, 1)    # stretch factor 1
+view = QGraphicsView(scene)
+view.show()
 
-    def action1(self):
-        self.label.setText("Action 1 triggered")
-
-    def action2(self):
-        self.label.setText("Action 2 triggered")
-
-
-app = QApplication(sys.argv)
-window = MainWindow()
-window.resize(800, 400)
-window.show()
-sys.exit(app.exec())
+app.exec()
