@@ -12,7 +12,7 @@ from diagram_vectorization.content_presentation import Content, ContentType
 # Constants defining segmentation thresholds and morphological grouping rules
 
 MIN_AREA_PCT = 0.0005   # 0.05% of the image area (tuneable)
-MAX_AREA_PCT = 0.25     # 25% of the image area (tuneable)
+MAX_AREA_PCT = 0.50     # 50% of the image area (tuneable)
 #MORPH_KERNEL = (15, 15)     # Morphological kernel size for region grouping (now dynamic)
 OCR_INTERVAL = 5   # seconds between OCR for existing regions
 CHANGE_THRESHOLD = 25  # region difference threshold
@@ -28,16 +28,25 @@ FLIP_CONFIRM_FRAMES = 5
 
 # If a stable text/equation region temporarily disappears (e.g., screen blow-up), keep it alive
 KEEPALIVE_MIN_AGE = 5
+DIAGRAM_KEEPALIVE_MIN_AGE = 2
 MISSING_CONFIRM_FRAMES = 5
+RECOVERY_GRACE_FRAMES = 4
 
 # Ignore "monster" regions that cover most of the screen (often transient camera/zoom artifacts)
 MONSTER_AREA_FRAC = 0.85
 
 # Matching and occlusion handling
 MATCH_IOU_THRESH = 0.35  # IoU threshold for matching new boxes to previous regions
+RECOVERY_CENTER_DIST_FRAC = 0.75
+RECOVERY_AREA_RATIO_MIN = 0.18
+RECOVERY_ASPECT_RATIO_MIN = 0.20
+
+# Merge highly-overlapping candidate boxes before tracking.
+BOX_MERGE_OVERLAP_MIN = 0.60      # overlap / smaller box area
+BOX_MERGE_AREA_RATIO_MIN = 0.18   # prevents tiny nested noise from always merging
 
 # Treat large/overlapping blobs as occluders during "screen blow-up" and do not treat as content
-OCCLUDER_AREA_FRAC = 0.22          # if a candidate region covers >22% of frame area, consider occluder
+OCCLUDER_AREA_FRAC = 0.45          # if a candidate region is large and overlaps many previous regions, consider occluder
 OCCLUDER_OVERLAP_COUNT = 3         # or if it overlaps >=3 previous regions significantly
 OCCLUDER_IOU_MIN = 0.12            # what counts as "significant overlap"
 from paddleocr import PaddleOCR
@@ -47,13 +56,21 @@ from paddleocr import PaddleOCR
 
 
 class Segmenter:
-    def __init__(self, use_english_model =True, epsilon=0.12):
+    def __init__(self, use_english_model =True, epsilon=0.12, logger=None, verbose_ocr=False, log_saved_results=False):
         # Initialize the segmenter and load OCR model; retains state between frames
         self.use_english_model = use_english_model
         self.epsilon = epsilon # IoU threshold tolerance for region matching
         self.prev_regions = []  # Cached regions from previous frame
         self.prev_img = None   # Cached image from previous frame
         self._next_region_id = 1
+        self.recovery_frames_remaining = 0
+        self.close_kernel_width_frac = 0.025
+        self.close_kernel_height_frac = 0.025
+        self.max_area_pct = MAX_AREA_PCT
+        self.occluder_area_frac = OCCLUDER_AREA_FRAC
+        self.logger = logger
+        self.verbose_ocr = bool(verbose_ocr)
+        self.log_saved_results = bool(log_saved_results)
 
         # Model configuration and paths
         BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -74,6 +91,43 @@ class Segmenter:
         self._ensure_model()        # Ensure the model exists locally (download if missing)
         self.recognizer = self._load_recognizer()  # Load PaddleOCR recognizer instance
 
+    def _emit_log(self, level, message):
+        if self.logger is not None and hasattr(self.logger, "emit"):
+            self.logger.emit(level, message)
+        else:
+            print(f"[{level}] {message}")
+
+    def _log_info(self, message):
+        self._emit_log("INFO", message)
+
+    def _log_error(self, message):
+        self._emit_log("ERROR", message)
+
+    def apply_runtime_settings(self, settings_snapshot=None):
+        if settings_snapshot is None:
+            self.close_kernel_width_frac = 0.025
+            self.close_kernel_height_frac = 0.025
+            self.max_area_pct = MAX_AREA_PCT
+            self.occluder_area_frac = OCCLUDER_AREA_FRAC
+            return
+
+        self.close_kernel_width_frac = max(
+            0.001,
+            float(getattr(settings_snapshot, "segment_kernel_width_frac", 0.025)),
+        )
+        self.close_kernel_height_frac = max(
+            0.001,
+            float(getattr(settings_snapshot, "segment_kernel_height_frac", 0.025)),
+        )
+        self.max_area_pct = min(
+            0.95,
+            max(0.01, float(getattr(settings_snapshot, "segment_max_area_pct", MAX_AREA_PCT))),
+        )
+        self.occluder_area_frac = min(
+            0.95,
+            max(0.05, float(getattr(settings_snapshot, "segment_occluder_area_frac", OCCLUDER_AREA_FRAC))),
+        )
+
 
     def segment_regions_only(self, img):
         """
@@ -92,15 +146,15 @@ class Segmenter:
             return
         os.makedirs(self.model_base, exist_ok=True)
         tar_path = os.path.join(self.model_base, os.path.basename(self.model_url))
-        print(f"[INFO] Downloading OCR model from {self.model_url} ...")
+        self._log_info(f"Downloading OCR model from {self.model_url} ...")
         urllib.request.urlretrieve(self.model_url, tar_path)
         with tarfile.open(tar_path) as tar:
             tar.extractall(path=self.model_base)
         os.remove(tar_path)
-        print(f"[INFO] Model extracted to {self.model_base}")
+        self._log_info(f"Model extracted to {self.model_base}")
 
     def _load_recognizer(self):
-        print(f"[INFO] Loading PaddleOCR model...")
+        self._log_info("Loading PaddleOCR model...")
 
         if self.use_english_model:
             model_type = "en_PP-OCRv5_mobile_rec"
@@ -109,14 +163,14 @@ class Segmenter:
             model_type = "PP-OCRv5_mobile_rec"
             self.model_name = "PP-OCRv5_mobile_rec_infer"
 
-        print(f"[INFO] Selected OCR model: {self.model_name}")
+        self._log_info(f"Selected OCR model: {self.model_name}")
 
         recognizer = TextRecognition(
             model_name=model_type,
             device="gpu"
         )
 
-        print("[INFO] OCR model loaded successfully.")
+        self._log_info("OCR model loaded successfully.")
         return recognizer
 
     def segment_frame(self, image_path, output_json=None, output_img=None):
@@ -131,11 +185,11 @@ class Segmenter:
 
         # If this is the first frame, mark all regions as new
         if not self.prev_regions:
-            print(f"[INFO] Initial frame: {len(boxes)} regions detected.")
+            self._log_info(f"Initial frame: {len(boxes)} regions detected.")
             scored = self._score_regions(img, boxes, status="new")
         else:
             # For subsequent frames, compare each region against previous frame
-            print(f"[INFO] Comparing {len(boxes)} regions to previous frame...")
+            self._log_info(f"Comparing {len(boxes)} regions to previous frame...")
             scored = self._compare_and_score(img, boxes)
 
         # Cache the regions for use in the next frame comparison
@@ -210,10 +264,13 @@ class Segmenter:
 
         # Dynamic morphological closing
         h, w = img.shape[:2]
-        k = max(3, int(min(h, w) * 0.025))  # 2.5% of board dimension
-        if k % 2 == 0:
-            k += 1
-        kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (k, k))
+        kernel_w = max(3, int(round(w * self.close_kernel_width_frac)))
+        kernel_h = max(3, int(round(h * self.close_kernel_height_frac)))
+        if kernel_w % 2 == 0:
+            kernel_w += 1
+        if kernel_h % 2 == 0:
+            kernel_h += 1
+        kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (kernel_w, kernel_h))
 
         closed = cv2.morphologyEx(binary, cv2.MORPH_CLOSE, kernel)
         return closed
@@ -226,7 +283,7 @@ class Segmenter:
 
         # Compute dynamic thresholds
         min_area = total_pixels * MIN_AREA_PCT
-        max_area = total_pixels * MAX_AREA_PCT
+        max_area = total_pixels * self.max_area_pct
 
         boxes = []
 
@@ -242,11 +299,148 @@ class Segmenter:
 
             boxes.append((x, y, bw, bh))
 
-        return boxes
+        return self._merge_candidate_boxes(boxes)
+
+    def _merge_candidate_boxes(self, boxes):
+        if len(boxes) < 2:
+            return boxes
+
+        def intersection_area(box_a, box_b):
+            ax, ay, aw, ah = map(int, box_a)
+            bx, by, bw, bh = map(int, box_b)
+            x1 = max(ax, bx)
+            y1 = max(ay, by)
+            x2 = min(ax + aw, bx + bw)
+            y2 = min(ay + ah, by + bh)
+            return max(0, x2 - x1) * max(0, y2 - y1)
+
+        def union_box(box_a, box_b):
+            ax, ay, aw, ah = map(int, box_a)
+            bx, by, bw, bh = map(int, box_b)
+            x1 = min(ax, bx)
+            y1 = min(ay, by)
+            x2 = max(ax + aw, bx + bw)
+            y2 = max(ay + ah, by + bh)
+            return (x1, y1, x2 - x1, y2 - y1)
+
+        def should_merge(box_a, box_b):
+            inter = intersection_area(box_a, box_b)
+            if inter <= 0:
+                return False
+
+            area_a = max(1, int(box_a[2]) * int(box_a[3]))
+            area_b = max(1, int(box_b[2]) * int(box_b[3]))
+            overlap_over_min = inter / float(min(area_a, area_b))
+            area_ratio = min(area_a, area_b) / float(max(area_a, area_b))
+
+            return (
+                overlap_over_min >= BOX_MERGE_OVERLAP_MIN
+                and area_ratio >= BOX_MERGE_AREA_RATIO_MIN
+            )
+
+        merged = [tuple(map(int, box)) for box in boxes]
+        changed = True
+
+        while changed:
+            changed = False
+            next_boxes = []
+            used = [False] * len(merged)
+
+            for i, box in enumerate(merged):
+                if used[i]:
+                    continue
+
+                current = box
+                used[i] = True
+                merged_this_round = True
+
+                while merged_this_round:
+                    merged_this_round = False
+                    for j, other in enumerate(merged):
+                        if used[j]:
+                            continue
+                        if should_merge(current, other):
+                            current = union_box(current, other)
+                            used[j] = True
+                            merged_this_round = True
+                            changed = True
+
+                next_boxes.append(current)
+
+            merged = next_boxes
+
+        return merged
+
+    def _bbox_match_metrics(self, bbox_a, bbox_b):
+        ax, ay, aw, ah = map(int, bbox_a)
+        bx, by, bw, bh = map(int, bbox_b)
+
+        inter_x1 = max(ax, bx)
+        inter_y1 = max(ay, by)
+        inter_x2 = min(ax + aw, bx + bw)
+        inter_y2 = min(ay + ah, by + bh)
+
+        inter_w = max(0, inter_x2 - inter_x1)
+        inter_h = max(0, inter_y2 - inter_y1)
+        inter_area = inter_w * inter_h
+
+        area_a = max(1, aw * ah)
+        area_b = max(1, bw * bh)
+        union_area = area_a + area_b - inter_area
+        iou = inter_area / float(union_area + 1e-6)
+
+        acx = ax + (aw / 2.0)
+        acy = ay + (ah / 2.0)
+        bcx = bx + (bw / 2.0)
+        bcy = by + (bh / 2.0)
+        center_dist = ((acx - bcx) ** 2 + (acy - bcy) ** 2) ** 0.5
+        diag_norm = max(
+            1.0,
+            ((aw ** 2 + ah ** 2) ** 0.5),
+            ((bw ** 2 + bh ** 2) ** 0.5),
+        )
+        center_dist_frac = center_dist / diag_norm
+
+        area_ratio = min(area_a, area_b) / float(max(area_a, area_b))
+
+        aspect_a = aw / float(max(1, ah))
+        aspect_b = bw / float(max(1, bh))
+        aspect_ratio = min(aspect_a, aspect_b) / float(max(aspect_a, aspect_b, 1e-6))
+
+        return iou, center_dist_frac, area_ratio, aspect_ratio
+
+    def _is_recoverable_region(self, region):
+        display_label = str(region.get("display_label", region.get("label", "diagram")))
+        min_age = DIAGRAM_KEEPALIVE_MIN_AGE if display_label == "diagram" else KEEPALIVE_MIN_AGE
+        return display_label in ("text", "equation", "diagram") and int(region.get("age", 1)) >= min_age
+
+    def _recovery_score(self, prev_region, new_bbox):
+        if not self._is_recoverable_region(prev_region):
+            return None
+
+        missing_streak = int(prev_region.get("missing_streak", 0))
+        if missing_streak <= 0 and self.recovery_frames_remaining <= 0:
+            return None
+
+        iou, center_dist_frac, area_ratio, aspect_ratio = self._bbox_match_metrics(prev_region["bbox"], new_bbox)
+        if center_dist_frac > RECOVERY_CENTER_DIST_FRAC:
+            return None
+        if area_ratio < RECOVERY_AREA_RATIO_MIN:
+            return None
+        if aspect_ratio < RECOVERY_ASPECT_RATIO_MIN:
+            return None
+
+        return (
+            0.55 * area_ratio
+            + 0.30 * aspect_ratio
+            + 0.15 * max(0.0, 1.0 - (center_dist_frac / RECOVERY_CENTER_DIST_FRAC))
+            + 0.50 * iou
+        )
 
     def _compare_and_score(self, img, new_boxes):
         results = []
         now = time.time()
+        recovered_region_confirmed = False
 
         # Reset occluder flag for this segmentation pass
         self.occluder_present = False
@@ -292,7 +486,7 @@ class Segmenter:
                         if overlap_count >= OCCLUDER_OVERLAP_COUNT:
                             break
 
-                if area_frac >= OCCLUDER_AREA_FRAC or overlap_count >= OCCLUDER_OVERLAP_COUNT:
+                if area_frac >= self.occluder_area_frac and overlap_count >= OCCLUDER_OVERLAP_COUNT:
                     self.occluder_present = True
                     # Skip creating a content region for this blob
                     continue
@@ -305,34 +499,38 @@ class Segmenter:
             best_iou = 0.0
             best_prev = None
             best_prev_idx = None
+            best_recovery_score = -1.0
+            best_recovery_prev = None
+            best_recovery_idx = None
 
             for idx, prev in enumerate(self.prev_regions):
                 if idx in used_prev_idxs:
                     continue
 
-                px, py, pw, ph = prev["bbox"]
-                px, py, pw, ph = int(px), int(py), int(pw), int(ph)
-
-                inter_x1 = max(x, px)
-                inter_y1 = max(y, py)
-                inter_x2 = min(x + w, px + pw)
-                inter_y2 = min(y + h, py + ph)
-
-                inter_w = max(0, inter_x2 - inter_x1)
-                inter_h = max(0, inter_y2 - inter_y1)
-                inter_area = inter_w * inter_h
-                union_area = (w * h) + (pw * ph) - inter_area
-                iou = inter_area / union_area if union_area > 0 else 0.0
+                iou, _, _, _ = self._bbox_match_metrics(prev["bbox"], new_bbox)
 
                 if iou > best_iou:
                     best_iou = iou
                     best_prev = prev
                     best_prev_idx = idx
 
+                recovery_score = self._recovery_score(prev, new_bbox)
+                if recovery_score is not None and recovery_score > best_recovery_score:
+                    best_recovery_score = recovery_score
+                    best_recovery_prev = prev
+                    best_recovery_idx = idx
+
             matched_region = None
+            matched_prev_idx = None
             if best_prev is not None and best_iou >= MATCH_IOU_THRESH:
                 matched_region = best_prev
-                used_prev_idxs.add(best_prev_idx)
+                matched_prev_idx = best_prev_idx
+            elif best_recovery_prev is not None:
+                matched_region = best_recovery_prev
+                matched_prev_idx = best_recovery_idx
+
+            if matched_prev_idx is not None:
+                used_prev_idxs.add(matched_prev_idx)
 
             # -----------------------------
             # Case 1: New region => DO NOT OCR YET
@@ -376,6 +574,9 @@ class Segmenter:
             result.setdefault("flip_streak", 0)
             result.setdefault("missing_streak", 0)
 
+            if int(matched_region.get("missing_streak", 0)) > 0:
+                recovered_region_confirmed = True
+
             age = now - float(result.get("first_seen_time", now))
             has_ocr = bool(result.get("has_ocr", False))
 
@@ -383,6 +584,7 @@ class Segmenter:
             if not has_ocr:
                 if age >= NEW_REGION_MIN_AGE_S or result["seen_count"] >= NEW_REGION_MIN_HITS:
                     ocr = self._ocr_single_region(img, new_bbox, status="new")
+                    ocr["region_id"] = int(result["region_id"])
                     ocr["first_seen_time"] = float(result["first_seen_time"])
                     ocr["seen_count"] = int(result["seen_count"])
                     ocr["has_ocr"] = True
@@ -414,6 +616,7 @@ class Segmenter:
             elapsed = now - float(matched_region.get("last_ocr_time", 0.0))
             if changed or elapsed >= OCR_INTERVAL:
                 ocr = self._ocr_single_region(img, new_bbox, status="existing")
+                ocr["region_id"] = int(result["region_id"])
                 ocr["first_seen_time"] = float(result["first_seen_time"])
                 ocr["seen_count"] = int(result["seen_count"])
                 ocr["has_ocr"] = True
@@ -426,7 +629,7 @@ class Segmenter:
                 results.append(result)
 
         # ------------------------------------------------------------------
-        # Keepalive for stable text/equation regions that temporarily disappear
+        # Keepalive for stable regions that temporarily disappear
         # (e.g., transient zoom/blow-up). We only drop them after they have
         # been missing for MISSING_CONFIRM_FRAMES consecutive segmentations.
         # ------------------------------------------------------------------
@@ -437,9 +640,10 @@ class Segmenter:
                     continue
 
                 disp = str(prev.get("display_label", prev.get("label", "diagram")))
+                min_age = DIAGRAM_KEEPALIVE_MIN_AGE if disp == "diagram" else KEEPALIVE_MIN_AGE
                 is_keepalive = (
-                    disp in ("text", "equation")
-                    and int(prev.get("age", 1)) >= KEEPALIVE_MIN_AGE
+                    disp in ("text", "equation", "diagram")
+                    and int(prev.get("age", 1)) >= min_age
                 )
 
                 if not is_keepalive:
@@ -457,6 +661,11 @@ class Segmenter:
                     results.append(ghost)
         except Exception:
             pass
+
+        if self.occluder_present or recovered_region_confirmed:
+            self.recovery_frames_remaining = RECOVERY_GRACE_FRAMES
+        elif self.recovery_frames_remaining > 0:
+            self.recovery_frames_remaining -= 1
 
 
         return results
@@ -572,9 +781,8 @@ class Segmenter:
         except Exception as e:
             elapsed = time.perf_counter() - start_time
             text, conf = "", 0.0
-            print(
-                f"[{timestamp}] [ERROR] OCR failed ({x},{y},{w},{h}) "
-                f"after {elapsed:.3f}s: {e}"
+            self._log_error(
+                f"{timestamp} OCR failed ({x},{y},{w},{h}) after {elapsed:.3f}s: {e}"
             )
             text, conf = "", 0.0
 
@@ -584,10 +792,14 @@ class Segmenter:
 
         label = self._classify(text, conf, crop=crop, box=box)
 
-        print(
-            f"[{timestamp}] [INFO] OCR region ({x},{y},{w},{h}) "
-            f"took {elapsed:.3f}s | label={label} | conf={conf:.3f} | text=\"{text[:64]}\""
-        )
+        if self.verbose_ocr:
+            if self.logger is not None and hasattr(self.logger, "ocr_trace"):
+                self.logger.ocr_trace((x, y, w, h), elapsed, label, conf, text[:64])
+            else:
+                self._log_info(
+                    f"{timestamp} OCR region ({x},{y},{w},{h}) took {elapsed:.3f}s | "
+                    f"label={label} | conf={conf:.3f} | text=\"{text[:64]}\""
+                )
         
         return {
             "bbox": [x, y, w, h],
@@ -602,7 +814,13 @@ class Segmenter:
 
     def _score_regions(self, img, boxes, status="new"):
         # Run OCR on all regions with a uniform status (used for first frame)
-        return [self._ocr_single_region(img, b, status) for b in boxes]
+        scored = []
+        for box in boxes:
+            region = self._ocr_single_region(img, box, status)
+            region["region_id"] = self._next_region_id
+            self._next_region_id += 1
+            scored.append(region)
+        return scored
 
     def _classify(self, text, conf, crop = None, box=None):
         # Lightweight content classifier based on recognized text and confidence\
@@ -648,7 +866,8 @@ class Segmenter:
         os.makedirs(os.path.dirname(path), exist_ok=True)
         with open(path, "w") as f:
             json.dump(data, f, indent=2)
-        print(f"[INFO] Saved {len(data)} regions to {path}")
+        if self.log_saved_results:
+            self._log_info(f"Saved {len(data)} regions to {path}")
 
 
     def _detect_fraction_bar(self, crop):
@@ -661,8 +880,12 @@ class Segmenter:
         import cv2
         import numpy as np
 
-        print("\n================ FRACTION BAR DEBUG ================")
-        print(f"[FB] Crop shape: {crop.shape}")
+        debug = False
+        import builtins
+        log = builtins.print if debug else (lambda *args, **kwargs: None)
+        print = log
+        log("\n================ FRACTION BAR DEBUG ================")
+        log(f"[FB] Crop shape: {crop.shape}")
 
         gray = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY)
         blur = cv2.GaussianBlur(gray, (3, 3), 0)
@@ -670,7 +893,7 @@ class Segmenter:
         edges = cv2.Canny(blur, 60, 160)
 
         h, w = edges.shape
-        print(f"[FB] Edge image size: w={w}, h={h}")
+        log(f"[FB] Edge image size: w={w}, h={h}")
 
         # ---- Tunables ----
         MIN_LEN_FRAC = 0.60
@@ -678,11 +901,11 @@ class Segmenter:
         MAX_SLOPE = 0.15
         CENTER_BAND = (0.20, 0.80)
 
-        print(f"[FB] Params:")
-        print(f"     MIN_LEN_FRAC={MIN_LEN_FRAC}")
-        print(f"     MAX_GAP_PX={MAX_GAP_PX}")
-        print(f"     MAX_SLOPE={MAX_SLOPE}")
-        print(f"     CENTER_BAND={CENTER_BAND}")
+        log(f"[FB] Params:")
+        log(f"     MIN_LEN_FRAC={MIN_LEN_FRAC}")
+        log(f"     MAX_GAP_PX={MAX_GAP_PX}")
+        log(f"     MAX_SLOPE={MAX_SLOPE}")
+        log(f"     CENTER_BAND={CENTER_BAND}")
 
         lines = cv2.HoughLinesP(
             edges,
@@ -694,10 +917,10 @@ class Segmenter:
         )
 
         if lines is None:
-            print("[FB] ❌ No Hough lines detected")
+            log("[FB] [NO] No Hough lines detected")
             return False
 
-        print(f"[FB] Hough returned {len(lines)} candidate lines")
+        log(f"[FB] Hough returned {len(lines)} candidate lines")
 
         def continuity_score(edges_img, y, x1, x2, band=2):
             x1, x2 = sorted((int(x1), int(x2)))
@@ -714,8 +937,8 @@ class Segmenter:
             return score
 
         for idx, (x1, y1, x2, y2) in enumerate(lines[:, 0]):
-            print(f"\n[FB] ---- Candidate {idx} ----")
-            print(f"[FB] Raw line: ({x1},{y1}) -> ({x2},{y2})")
+            log(f"\n[FB] ---- Candidate {idx} ----")
+            log(f"[FB] Raw line: ({x1},{y1}) -> ({x2},{y2})")
 
             dx = x2 - x1
             dy = y2 - y1
@@ -723,30 +946,30 @@ class Segmenter:
             slope = abs(dy / (dx + 1e-6))
             mid_y = (y1 + y2) / 2.0
 
-            print(f"[FB] Length: {length:.1f}px (min {w * MIN_LEN_FRAC:.1f}px)")
+            log(f"[FB] Length: {length:.1f}px (min {w * MIN_LEN_FRAC:.1f}px)")
             if length < w * MIN_LEN_FRAC:
-                print("[FB] ❌ Rejected: too short")
+                log("[FB] [NO] Rejected: too short")
                 continue
 
-            print(f"[FB] Slope: {slope:.3f} (max {MAX_SLOPE})")
+            log(f"[FB] Slope: {slope:.3f} (max {MAX_SLOPE})")
             if slope > MAX_SLOPE:
-                print("[FB] ❌ Rejected: too slanted")
+                log("[FB] [NO] Rejected: too slanted")
                 continue
 
-            print(f"[FB] Mid Y: {mid_y:.1f}px (allowed {h * CENTER_BAND[0]:.1f}–{h * CENTER_BAND[1]:.1f})")
+            log(f"[FB] Mid Y: {mid_y:.1f}px (allowed {h * CENTER_BAND[0]:.1f}-{h * CENTER_BAND[1]:.1f})")
             if not (h * CENTER_BAND[0] <= mid_y <= h * CENTER_BAND[1]):
-                print("[FB] ❌ Rejected: outside center band")
+                log("[FB] [NO] Rejected: outside center band")
                 continue
 
             cont = continuity_score(edges, mid_y, x1, x2, band=2)
-            print(f"[FB] Continuity score: {cont:.3f} (min 0.85)")
+            log(f"[FB] Continuity score: {cont:.3f} (min 0.85)")
 
             if cont < 0.85:
-                print("[FB] ❌ Rejected: insufficient continuity")
+                log("[FB] [NO] Rejected: insufficient continuity")
                 continue
 
-            print("[FB] ✅ FRACTION BAR DETECTED")
+            log("[FB] [YES] FRACTION BAR DETECTED")
             return True
 
-        print("[FB] ❌ No candidates passed all checks")
+        log("[FB] [NO] No candidates passed all checks")
         return False

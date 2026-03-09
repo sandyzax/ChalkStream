@@ -1,6 +1,7 @@
 import cv2
 import mediapipe as mp
 import numpy as np
+from core import RuntimeSettingsSnapshot
 
 #Pre-Initialized variable
 cap = cv2.VideoCapture("Test2.mp4")
@@ -20,14 +21,52 @@ def board_resize(frame):
 
 
 # noise removal:
-fgbg = cv2.createBackgroundSubtractorMOG2(
-        history=50,
-        varThreshold=25,
-        detectShadows=False
+DEFAULT_PREPROCESS_HISTORY = 50
+DEFAULT_PREPROCESS_VAR_THRESHOLD = 25.0
+_noise_settings = {
+    "history": DEFAULT_PREPROCESS_HISTORY,
+    "var_threshold": DEFAULT_PREPROCESS_VAR_THRESHOLD,
+}
+
+
+def _create_background_subtractor(history, var_threshold):
+    return cv2.createBackgroundSubtractorMOG2(
+        history=int(history),
+        varThreshold=float(var_threshold),
+        detectShadows=False,
     )
+
+
+fgbg = _create_background_subtractor(
+    DEFAULT_PREPROCESS_HISTORY,
+    DEFAULT_PREPROCESS_VAR_THRESHOLD,
+)
 mp_selfie_segmentation = mp.solutions.selfie_segmentation.SelfieSegmentation(model_selection=0)
 
-def noise_removal(frame):
+
+def _ensure_background_subtractor(settings_snapshot=None):
+    global fgbg
+
+    if settings_snapshot is None:
+        history = DEFAULT_PREPROCESS_HISTORY
+        var_threshold = DEFAULT_PREPROCESS_VAR_THRESHOLD
+    else:
+        history = int(getattr(settings_snapshot, "preprocess_history", DEFAULT_PREPROCESS_HISTORY))
+        var_threshold = float(getattr(settings_snapshot, "preprocess_var_threshold", DEFAULT_PREPROCESS_VAR_THRESHOLD))
+
+    if (
+        fgbg is None
+        or _noise_settings["history"] != history
+        or abs(_noise_settings["var_threshold"] - var_threshold) > 1e-9
+    ):
+        fgbg = _create_background_subtractor(history, var_threshold)
+        _noise_settings["history"] = history
+        _noise_settings["var_threshold"] = var_threshold
+
+    return fgbg
+
+
+def noise_removal(frame, settings_snapshot=None):
     #filter out people
     rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
     result = mp_selfie_segmentation.process(rgb)
@@ -37,7 +76,7 @@ def noise_removal(frame):
     people_filtered = cv2.bitwise_and(frame, frame, mask=shrunk_mask)
 
     #filter out movements
-    fgmask = fgbg.apply(people_filtered)
+    fgmask = _ensure_background_subtractor(settings_snapshot).apply(people_filtered)
     kernel2 = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (18,18))
     shrunk_mask2 = cv2.dilate(fgmask, kernel2, iterations=1)
     bgmask = cv2.bitwise_not(shrunk_mask2)

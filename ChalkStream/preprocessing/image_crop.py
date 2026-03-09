@@ -1,5 +1,6 @@
 import cv2
 import numpy as np
+from pathlib import Path
 
 pts = np.array([
     [101, 86],  # top-left      [0]
@@ -24,7 +25,8 @@ dst = np.array([
 ], dtype="float32")
 
 M = cv2.getPerspectiveTransform(pts, dst)
-img = cv2.imread("input.jpg")
+REPO_ROOT = Path(__file__).resolve().parent.parent
+img = cv2.imread(str(REPO_ROOT / "assets" / "samples" / "input.jpg"))
 warp = cv2.warpPerspective(img, M, (maxWidth, maxHeight))
 
 cv2.imshow('Grayscale', warp)

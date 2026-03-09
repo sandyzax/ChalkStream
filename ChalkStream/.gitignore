@@ -1,0 +1,9 @@
+.venv/
+venv/
+env/
+ENV/
+venv-win-backup/
+__pycache__/
+*.py[cod]
+artifacts/
+segmentation/output_vis/

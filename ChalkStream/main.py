@@ -1,7 +1,7 @@
 """
 Entrypoint for ChalkStream: drive orchestration
 """
-from canvas.canvas import run_gui
+from canvas import run_gui
 
 
 if __name__ == "__main__":
