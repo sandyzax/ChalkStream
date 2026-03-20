@@ -725,6 +725,7 @@ def run_orchestrator(corners, gui=None, video_path: str = "pipeline/Test3.mp4", 
     # Step 2.1: Initialize noise_removal 
     first_warped = warp_board(first_frame, corners)
     noise_removal.previous_frame = first_warped.copy()
+    noise_removal.avg_background = first_warped.astype(np.float32)
     cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
     debug_console.startup(
         video_path=video_path,

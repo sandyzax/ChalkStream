@@ -4,7 +4,7 @@ import numpy as np
 from core import RuntimeSettingsSnapshot
 
 #Pre-Initialized variable
-cap = cv2.VideoCapture("Test2.mp4")
+cap = cv2.VideoCapture("Test3.mp4")
 
 # placeholder for now. Disable auto lighting adjustment. Require Logitech C920/C922 camera
 """ 
@@ -27,6 +27,11 @@ _noise_settings = {
     "history": DEFAULT_PREPROCESS_HISTORY,
     "var_threshold": DEFAULT_PREPROCESS_VAR_THRESHOLD,
 }
+
+previous_frame = None
+mp_selfie_segmentation = mp.solutions.selfie_segmentation.SelfieSegmentation(model_selection=0)
+alpha = 0.3
+blend = 0.1
 
 
 def _create_background_subtractor(history, var_threshold):
@@ -66,27 +71,51 @@ def _ensure_background_subtractor(settings_snapshot=None):
     return fgbg
 
 
+# def noise_removal(frame, settings_snapshot=None):
+#     #filter out people
+#     rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+#     result = mp_selfie_segmentation.process(rgb)
+#     mask = cv2.bitwise_not((result.segmentation_mask > 0.4).astype('uint8') * 255)
+#     kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (18,18))
+#     shrunk_mask = cv2.erode(mask, kernel, iterations=1)
+#     people_filtered = cv2.bitwise_and(frame, frame, mask=shrunk_mask)
+
+#     #filter out movements
+#     fgmask = _ensure_background_subtractor(settings_snapshot).apply(people_filtered)
+#     kernel2 = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (18,18))
+#     shrunk_mask2 = cv2.dilate(fgmask, kernel2, iterations=1)
+#     bgmask = cv2.bitwise_not(shrunk_mask2)
+#     movement_filtered = cv2.bitwise_and(people_filtered, people_filtered, mask=bgmask)
+
+#     filtered_out_area = cv2.bitwise_or(shrunk_mask2,cv2.bitwise_not(shrunk_mask))
+#     filtered_out_area = cv2.cvtColor(filtered_out_area, cv2.COLOR_GRAY2BGR)
+
+#     final_image = cv2.bitwise_or(movement_filtered,cv2.bitwise_and(noise_removal.previous_frame,filtered_out_area))
+#     noise_removal.previous_frame = final_image
+#     return final_image
 def noise_removal(frame, settings_snapshot=None):
-    #filter out people
+
     rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
     result = mp_selfie_segmentation.process(rgb)
-    mask = cv2.bitwise_not((result.segmentation_mask > 0.4).astype('uint8') * 255)
-    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (18,18))
+    mask = cv2.bitwise_not((result.segmentation_mask > 0.25).astype('uint8') * 255)
+    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (12,12))
     shrunk_mask = cv2.erode(mask, kernel, iterations=1)
     people_filtered = cv2.bitwise_and(frame, frame, mask=shrunk_mask)
-
+    
     #filter out movements
     fgmask = _ensure_background_subtractor(settings_snapshot).apply(people_filtered)
-    kernel2 = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (18,18))
-    shrunk_mask2 = cv2.dilate(fgmask, kernel2, iterations=1)
-    bgmask = cv2.bitwise_not(shrunk_mask2)
-    movement_filtered = cv2.bitwise_and(people_filtered, people_filtered, mask=bgmask)
+    bgmask = cv2.bitwise_not(fgmask)
+    cv2.accumulateWeighted(people_filtered, noise_removal.avg_background, alpha, mask=shrunk_mask)
+    background = cv2.convertScaleAbs(noise_removal.avg_background)
+    output = cv2.addWeighted(noise_removal.previous_frame, 1-blend, background, blend, 0)
+    movement_filtered = cv2.bitwise_and(output, output, mask=bgmask)
 
-    filtered_out_area = cv2.bitwise_or(shrunk_mask2,cv2.bitwise_not(shrunk_mask))
+    #combine
+    filtered_out_area = cv2.bitwise_or(fgmask,cv2.bitwise_not(shrunk_mask))
     filtered_out_area = cv2.cvtColor(filtered_out_area, cv2.COLOR_GRAY2BGR)
 
     final_image = cv2.bitwise_or(movement_filtered,cv2.bitwise_and(noise_removal.previous_frame,filtered_out_area))
-    noise_removal.previous_frame = final_image
+    noise_removal.previous_frame = final_image.copy()
     return final_image
 
 # grey scale

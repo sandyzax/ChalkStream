@@ -5,55 +5,100 @@ import mediapipe as mp
 """
 This script remove noises 
 """
+# noise removal:
+DEFAULT_PREPROCESS_HISTORY = 50
+DEFAULT_PREPROCESS_VAR_THRESHOLD = 25.0
+_noise_settings = {
+    "history": DEFAULT_PREPROCESS_HISTORY,
+    "var_threshold": DEFAULT_PREPROCESS_VAR_THRESHOLD,
+    
+}
+
+
+def _create_background_subtractor(history, var_threshold):
+    fgbg =  cv2.createBackgroundSubtractorMOG2(
+        history=int(history),
+        varThreshold=float(var_threshold),
+        detectShadows=True,
+    )
+    fgbg.setShadowThreshold(0)
+    return fgbg
+
+
+fgbg = _create_background_subtractor(
+    DEFAULT_PREPROCESS_HISTORY,
+    DEFAULT_PREPROCESS_VAR_THRESHOLD,
+)
+mp_selfie_segmentation = mp.solutions.selfie_segmentation.SelfieSegmentation(model_selection=0)
+
+
+def _ensure_background_subtractor(settings_snapshot=None):
+    global fgbg
+
+    if settings_snapshot is None:
+        history = DEFAULT_PREPROCESS_HISTORY
+        var_threshold = DEFAULT_PREPROCESS_VAR_THRESHOLD
+    else:
+        history = int(getattr(settings_snapshot, "preprocess_history", DEFAULT_PREPROCESS_HISTORY))
+        var_threshold = float(getattr(settings_snapshot, "preprocess_var_threshold", DEFAULT_PREPROCESS_VAR_THRESHOLD))
+
+    if (
+        fgbg is None
+        or _noise_settings["history"] != history
+        or abs(_noise_settings["var_threshold"] - var_threshold) > 1e-9
+    ):
+        fgbg = _create_background_subtractor(history, var_threshold)
+        _noise_settings["history"] = history
+        _noise_settings["var_threshold"] = var_threshold
+
+    return fgbg
+
+
+def noise_removal(frame, settings_snapshot=None):
+    #filter out people
+    rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+    result = mp_selfie_segmentation.process(rgb)
+    mask = cv2.bitwise_not((result.segmentation_mask > 0.4).astype('uint8') * 255)
+    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (18,18))
+    shrunk_mask = cv2.erode(mask, kernel, iterations=1)
+    people_filtered = cv2.bitwise_and(frame, frame, mask=shrunk_mask)
+
+    #filter out movements
+    fgmask = _ensure_background_subtractor(settings_snapshot).apply(people_filtered)
+    kernel2 = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (18,18))
+    shrunk_mask2 = cv2.dilate(fgmask, kernel2, iterations=1)
+    bgmask = cv2.bitwise_not(shrunk_mask2)
+    movement_filtered = cv2.bitwise_and(people_filtered, people_filtered, mask=bgmask)
+
+    filtered_out_area = cv2.bitwise_or(shrunk_mask2,cv2.bitwise_not(shrunk_mask))
+    filtered_out_area = cv2.cvtColor(filtered_out_area, cv2.COLOR_GRAY2BGR)
+
+    final_image = cv2.bitwise_or(movement_filtered,cv2.bitwise_and(noise_removal.previous_frame,filtered_out_area))
+    noise_removal.previous_frame = final_image
+    return final_image
+
 def run():
     cap = cv2.VideoCapture("Test3.mp4")
     ret, frame = cap.read()
     if not ret:
         exit()
-    fgbg = cv2.createBackgroundSubtractorMOG2(
-        history=500,
-        varThreshold=25,
-        detectShadows=False
-    )
-    mp_selfie_segmentation = mp.solutions.selfie_segmentation.SelfieSegmentation(model_selection=0)
-    previous_frame = frame.copy()
-
-    alpha = 0.3
     
-    blend = 0.05       # smoothing between frames
+    
+    noise_removal.previous_frame = frame.copy()
+    global avg_background
     avg_background = frame.astype(np.float32)
+
+    
     while cap.isOpened():
         ret, frame = cap.read()
         if not ret:
             break
 
-        #filter out people
-        rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-        result = mp_selfie_segmentation.process(rgb)
-        mask = cv2.bitwise_not((result.segmentation_mask > 0.25).astype('uint8') * 255)
-        kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (12,12))
-        shrunk_mask = cv2.erode(mask, kernel, iterations=1)
-        people_filtered = cv2.bitwise_and(frame, frame, mask=shrunk_mask)
-        
-        #filter out movements
-        fgmask = fgbg.apply(people_filtered)
-        bgmask = cv2.bitwise_not(fgmask)
-        cv2.accumulateWeighted(people_filtered, avg_background, alpha, mask=shrunk_mask)
-        background = cv2.convertScaleAbs(avg_background)
-        output = cv2.addWeighted(previous_frame, 1-blend, background, blend, 0)
-        movement_filtered = cv2.bitwise_and(output, output, mask=bgmask)
+        output = noise_removal(frame)
 
-        #combine
-        filtered_out_area = cv2.bitwise_or(fgmask,cv2.bitwise_not(shrunk_mask))
-        filtered_out_area = cv2.cvtColor(filtered_out_area, cv2.COLOR_GRAY2BGR)
-
-        final_image = cv2.bitwise_or(movement_filtered,cv2.bitwise_and(previous_frame,filtered_out_area))
-
-        cv2.imshow('Original', people_filtered)
+        cv2.imshow('Original', frame)
         cv2.imshow('Professor Filtered', output)
         
-        previous_frame = final_image.copy()
-
         if cv2.waitKey(5) & 0xFF == 27:
             break
 
