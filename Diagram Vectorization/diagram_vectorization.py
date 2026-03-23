@@ -10,9 +10,9 @@ def diagram_vectorization(cv_image, vectorization=False):
 
     if vectorization:
         lines = transform.probabilistic_hough_line(bw.astype(np.uint8), 
-                                                 threshold=10, 
+                                                 threshold=20, 
                                                  line_length=100, 
-                                                 line_gap=5)
+                                                 line_gap=2)
 
         for line in lines:
             p0, p1 = line
@@ -22,13 +22,13 @@ def diagram_vectorization(cv_image, vectorization=False):
     return digital_canvas
 
 if __name__ == "__main__":
-    image = cv2.imread("i3.jpg")
+    image = cv2.imread("i1.jpg")
     if image is None:
         print("Error: Could not find image.")
     else:
         diagram = diagram_vectorization(image,True)
         
-        cv2.imshow("Original", cv2.resize(image, (0,0), fx=0.5, fy=0.5))
-        cv2.imshow("Digitalized", cv2.resize(diagram, (0,0), fx=0.5, fy=0.5))
+        cv2.imshow("Original", image)
+        cv2.imshow("Digitalized", diagram)
         cv2.waitKey(0)
         cv2.destroyAllWindows()
