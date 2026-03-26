@@ -1,4 +1,4 @@
-# preprocessing/mp4_audio_playback.py
+"""Helpers for optional background audio playback when replaying recorded videos."""
 
 from __future__ import annotations
 
@@ -10,7 +10,7 @@ import numpy as np
 import sounddevice as sd
 
 try:
-    # moviepy is "pip-only" and avoids system ffmpeg installs in many setups
+    # MoviePy keeps the dependency footprint simple for local development.
     from moviepy import VideoFileClip
 except Exception:  # pragma: no cover
     VideoFileClip = None
@@ -18,16 +18,18 @@ except Exception:  # pragma: no cover
 
 @dataclass
 class AudioPlaybackHandle:
+    """Small handle used to stop playback and release the decoded clip cleanly."""
+
     clip: object  # VideoFileClip
     thread: threading.Thread
     sr: int
 
     def stop(self):
+        """Stop playback and release the underlying movie resource."""
         try:
             sd.stop()
         finally:
             try:
-                # Close moviepy resources
                 if self.clip is not None:
                     self.clip.close()
             except Exception:
@@ -35,13 +37,9 @@ class AudioPlaybackHandle:
 
 
 def start_audio_playback(video_path: Union[str, int], sr: int = 44100) -> Optional[AudioPlaybackHandle]:
-    """
-    Start MP4 audio playback asynchronously.
-    - If video_path is int (webcam), returns None (no audio playback).
-    - If moviepy isn't installed/available, raises RuntimeError with a clear message.
-    """
+    """Start video audio in a background thread when the source is a recorded file."""
     if isinstance(video_path, int):
-        return None  # live camera source -> no audio track to play
+        return None
 
     if VideoFileClip is None:
         raise RuntimeError("moviepy is not installed. Run: pip install moviepy")
@@ -50,9 +48,8 @@ def start_audio_playback(video_path: Union[str, int], sr: int = 44100) -> Option
 
     if clip.audio is None:
         clip.close()
-        return None  # MP4 has no audio track
+        return None
 
-    # Decode to numpy array (N x C), float32
     audio_np = clip.audio.to_soundarray(fps=sr).astype(np.float32)
 
     def _play():

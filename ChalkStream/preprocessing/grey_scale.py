@@ -1,3 +1,5 @@
+"""Minimal grayscale preview script kept from early preprocessing experiments."""
+
 import cv2
 
 cap = cv2.VideoCapture("Test1.mp4")

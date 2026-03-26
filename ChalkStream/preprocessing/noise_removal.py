@@ -1,10 +1,10 @@
+"""Standalone experiment for the people and motion removal stage."""
+
 import cv2
 import mediapipe as mp
 
-"""
-This script remove noises 
-"""
 def run():
+    """Play a test video through the older preprocessing-only pipeline."""
     cap = cv2.VideoCapture("Test2.mp4")
     fgbg = cv2.createBackgroundSubtractorMOG2(
         history=500,
@@ -22,7 +22,7 @@ def run():
         if previous_frame is None:
             previous_frame = frame.copy()
 
-        #filter out people
+        # Mask out people first so they do not feed into the motion model.
         rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
         result = mp_selfie_segmentation.process(rgb)
         mask = cv2.bitwise_not((result.segmentation_mask > 0.25).astype('uint8') * 255)
@@ -30,7 +30,7 @@ def run():
         shrunk_mask = cv2.erode(mask, kernel, iterations=1)
         people_filtered = cv2.bitwise_and(frame, frame, mask=shrunk_mask)
 
-        #filter out movements
+        # Then remove movement that does not belong to the static board.
         fgmask = fgbg.apply(people_filtered)
         bgmask = cv2.bitwise_not(fgmask)
         movement_filtered = cv2.bitwise_and(people_filtered, people_filtered, mask=bgmask)
@@ -50,5 +50,7 @@ def run():
 
     cap.release()
     cv2.destroyAllWindows()
+
+
 if __name__ == "__main__":
     run()

@@ -1,54 +1,89 @@
+"""Persistent region tracking, lightweight OCR, and heuristic classification."""
+
 from datetime import datetime
 import time
 import cv2
 import os
 import json
 import tarfile
+import urllib.error
+import urllib.parse
 import urllib.request
 from paddleocr import TextRecognition, TextDetection, PaddleOCR
 import numpy
 from diagram_vectorization.content_presentation import Content, ContentType
+from core import load_app_settings
+
+
+SEGMENTATION_SETTINGS = load_app_settings().get("segmentation", {})
 
 # Constants defining segmentation thresholds and morphological grouping rules
 
-MIN_AREA_PCT = 0.0005   # 0.05% of the image area (tuneable)
-MAX_AREA_PCT = 0.50     # 50% of the image area (tuneable)
+MIN_AREA_PCT = float(SEGMENTATION_SETTINGS.get("min_area_pct", 0.0005))
+MAX_AREA_PCT = float(SEGMENTATION_SETTINGS.get("max_area_pct", 0.50))
 #MORPH_KERNEL = (15, 15)     # Morphological kernel size for region grouping (now dynamic)
-OCR_INTERVAL = 5   # seconds between OCR for existing regions
-CHANGE_THRESHOLD = 25  # region difference threshold
+OCR_INTERVAL = float(SEGMENTATION_SETTINGS.get("ocr_interval_s", 5.0))
+TEXT_OCR_BACKEND = str(SEGMENTATION_SETTINGS.get("text_ocr_backend", "paddle")).strip().lower()
+TEXT_OCR_URL = str(SEGMENTATION_SETTINGS.get("text_ocr_url", "http://127.0.0.1:8010/infer_text"))
+TEXT_OCR_MODEL = str(SEGMENTATION_SETTINGS.get("text_ocr_model", "TextOCR_V1"))
+CHANGE_THRESHOLD = float(SEGMENTATION_SETTINGS.get("change_threshold", 25))
 # Only OCR once region is persistent
-NEW_REGION_MIN_AGE_S = 1.0      # or 2.0 if you want
-NEW_REGION_MIN_HITS = 2         # "2 segmentations"
+NEW_REGION_MIN_AGE_S = float(SEGMENTATION_SETTINGS.get("new_region_min_age_s", 1.0))
+NEW_REGION_MIN_HITS = int(SEGMENTATION_SETTINGS.get("new_region_min_hits", 2))
 
 # Consecutive frames required before showing non-diagram label
-STABLE_LABEL_MIN_AGE = 5
+STABLE_LABEL_MIN_AGE = int(SEGMENTATION_SETTINGS.get("stable_label_min_age", 5))
 
 # Consecutive frames required before switching an already-displayed label (debounce/hysteresis)
-FLIP_CONFIRM_FRAMES = 5
+FLIP_CONFIRM_FRAMES = int(SEGMENTATION_SETTINGS.get("flip_confirm_frames", 5))
 
 # If a stable text/equation region temporarily disappears (e.g., screen blow-up), keep it alive
-KEEPALIVE_MIN_AGE = 5
-DIAGRAM_KEEPALIVE_MIN_AGE = 2
-MISSING_CONFIRM_FRAMES = 5
-RECOVERY_GRACE_FRAMES = 4
+KEEPALIVE_MIN_AGE = int(SEGMENTATION_SETTINGS.get("keepalive_min_age", 5))
+DIAGRAM_KEEPALIVE_MIN_AGE = int(SEGMENTATION_SETTINGS.get("diagram_keepalive_min_age", 2))
+MISSING_CONFIRM_FRAMES = int(SEGMENTATION_SETTINGS.get("missing_confirm_frames", 5))
+RECOVERY_GRACE_FRAMES = int(SEGMENTATION_SETTINGS.get("recovery_grace_frames", 4))
+MAX_MISSING_CONFIRM_FRAMES = int(SEGMENTATION_SETTINGS.get("max_missing_confirm_frames", 12))
+MISSING_CONFIRM_AGE_STEP = int(SEGMENTATION_SETTINGS.get("missing_confirm_age_step", 4))
+MISSING_CONFIRM_SEEN_STEP = int(SEGMENTATION_SETTINGS.get("missing_confirm_seen_step", 8))
 
 # Ignore "monster" regions that cover most of the screen (often transient camera/zoom artifacts)
-MONSTER_AREA_FRAC = 0.85
+MONSTER_AREA_FRAC = float(SEGMENTATION_SETTINGS.get("monster_area_frac", 0.85))
 
 # Matching and occlusion handling
-MATCH_IOU_THRESH = 0.35  # IoU threshold for matching new boxes to previous regions
-RECOVERY_CENTER_DIST_FRAC = 0.75
-RECOVERY_AREA_RATIO_MIN = 0.18
-RECOVERY_ASPECT_RATIO_MIN = 0.20
+MATCH_IOU_THRESH = float(SEGMENTATION_SETTINGS.get("match_iou_thresh", 0.35))
+RECOVERY_CENTER_DIST_FRAC = float(SEGMENTATION_SETTINGS.get("recovery_center_dist_frac", 0.75))
+RECOVERY_AREA_RATIO_MIN = float(SEGMENTATION_SETTINGS.get("recovery_area_ratio_min", 0.18))
+RECOVERY_ASPECT_RATIO_MIN = float(SEGMENTATION_SETTINGS.get("recovery_aspect_ratio_min", 0.20))
+RECOVERY_SCORE_MIN = float(SEGMENTATION_SETTINGS.get("recovery_score_min", 0.45))
+
+# Stable regions recover against a trusted anchor bbox so brief lighting/static artifacts
+# do not replace the region reference or spawn duplicates nearby.
+ANCHOR_UPDATE_IOU_MIN = float(SEGMENTATION_SETTINGS.get("anchor_update_iou_min", 0.45))
+ANCHOR_UPDATE_CENTER_DIST_FRAC = float(SEGMENTATION_SETTINGS.get("anchor_update_center_dist_frac", 0.35))
+ANCHOR_UPDATE_AREA_RATIO_MIN = float(SEGMENTATION_SETTINGS.get("anchor_update_area_ratio_min", 0.50))
+ANCHOR_UPDATE_ASPECT_RATIO_MIN = float(SEGMENTATION_SETTINGS.get("anchor_update_aspect_ratio_min", 0.45))
+ANCHOR_SMOOTHING = float(SEGMENTATION_SETTINGS.get("anchor_smoothing", 0.35))
+
+# If an unmatched candidate strongly overlaps the anchor of an already tracked region,
+# suppress it instead of creating a new region ID.
+DUPLICATE_SUPPRESSION_IOU = float(SEGMENTATION_SETTINGS.get("duplicate_suppression_iou", 0.50))
+DUPLICATE_SUPPRESSION_CENTER_DIST_FRAC = float(SEGMENTATION_SETTINGS.get("duplicate_suppression_center_dist_frac", 0.30))
+DUPLICATE_SUPPRESSION_AREA_RATIO_MIN = float(SEGMENTATION_SETTINGS.get("duplicate_suppression_area_ratio_min", 0.55))
+DUPLICATE_SUPPRESSION_ASPECT_RATIO_MIN = float(SEGMENTATION_SETTINGS.get("duplicate_suppression_aspect_ratio_min", 0.45))
 
 # Merge highly-overlapping candidate boxes before tracking.
-BOX_MERGE_OVERLAP_MIN = 0.60      # overlap / smaller box area
-BOX_MERGE_AREA_RATIO_MIN = 0.18   # prevents tiny nested noise from always merging
+BOX_MERGE_OVERLAP_MIN = float(SEGMENTATION_SETTINGS.get("box_merge_overlap_min", 0.60))
+BOX_MERGE_AREA_RATIO_MIN = float(SEGMENTATION_SETTINGS.get("box_merge_area_ratio_min", 0.18))
+BOX_MERGE_CONTAINMENT_MIN = float(SEGMENTATION_SETTINGS.get("box_merge_containment_min", 0.98))
 
 # Treat large/overlapping blobs as occluders during "screen blow-up" and do not treat as content
-OCCLUDER_AREA_FRAC = 0.45          # if a candidate region is large and overlaps many previous regions, consider occluder
-OCCLUDER_OVERLAP_COUNT = 3         # or if it overlaps >=3 previous regions significantly
-OCCLUDER_IOU_MIN = 0.12            # what counts as "significant overlap"
+OCCLUDER_AREA_FRAC = float(SEGMENTATION_SETTINGS.get("occluder_area_frac", 0.45))
+OCCLUDER_OVERLAP_COUNT = int(SEGMENTATION_SETTINGS.get("occluder_overlap_count", 3))
+OCCLUDER_IOU_MIN = float(SEGMENTATION_SETTINGS.get("occluder_iou_min", 0.12))
+
+# If an older region becomes almost fully contained by a larger active region,
+# retire the stale track instead of keeping both references around.
+ABSORB_CONTAINMENT_MIN = float(SEGMENTATION_SETTINGS.get("absorb_containment_min", 0.98))
 from paddleocr import PaddleOCR
 
 
@@ -56,10 +91,11 @@ from paddleocr import PaddleOCR
 
 
 class Segmenter:
-    def __init__(self, use_english_model =True, epsilon=0.12, logger=None, verbose_ocr=False, log_saved_results=False):
+    def __init__(self, use_english_model =True, epsilon=MATCH_IOU_THRESH, logger=None, verbose_ocr=False, log_saved_results=False):
         # Initialize the segmenter and load OCR model; retains state between frames
         self.use_english_model = use_english_model
-        self.epsilon = epsilon # IoU threshold tolerance for region matching
+        self.match_iou_thresh = min(0.95, max(0.01, float(epsilon)))
+        self.epsilon = self.match_iou_thresh
         self.prev_regions = []  # Cached regions from previous frame
         self.prev_img = None   # Cached image from previous frame
         self._next_region_id = 1
@@ -71,6 +107,9 @@ class Segmenter:
         self.logger = logger
         self.verbose_ocr = bool(verbose_ocr)
         self.log_saved_results = bool(log_saved_results)
+        self.text_ocr_backend = TEXT_OCR_BACKEND
+        self.text_ocr_url = TEXT_OCR_URL
+        self.text_ocr_model = TEXT_OCR_MODEL
 
         # Model configuration and paths
         BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -87,9 +126,9 @@ class Segmenter:
         )
 
         self.model_path = os.path.join(self.model_base, self.model_name)
-
-        self._ensure_model()        # Ensure the model exists locally (download if missing)
-        self.recognizer = self._load_recognizer()  # Load PaddleOCR recognizer instance
+        self.recognizer = None
+        if self.text_ocr_backend == "paddle":
+            self._ensure_local_recognizer()
 
     def _emit_log(self, level, message):
         if self.logger is not None and hasattr(self.logger, "emit"):
@@ -107,8 +146,10 @@ class Segmenter:
         if settings_snapshot is None:
             self.close_kernel_width_frac = 0.025
             self.close_kernel_height_frac = 0.025
-            self.max_area_pct = MAX_AREA_PCT
-            self.occluder_area_frac = OCCLUDER_AREA_FRAC
+            self.match_iou_thresh = MATCH_IOU_THRESH
+            self.epsilon = self.match_iou_thresh
+            self.text_ocr_backend = TEXT_OCR_BACKEND
+            self.text_ocr_model = TEXT_OCR_MODEL
             return
 
         self.close_kernel_width_frac = max(
@@ -119,14 +160,15 @@ class Segmenter:
             0.001,
             float(getattr(settings_snapshot, "segment_kernel_height_frac", 0.025)),
         )
-        self.max_area_pct = min(
+        self.match_iou_thresh = min(
             0.95,
-            max(0.01, float(getattr(settings_snapshot, "segment_max_area_pct", MAX_AREA_PCT))),
+            max(0.01, float(getattr(settings_snapshot, "segment_match_iou_thresh", MATCH_IOU_THRESH))),
         )
-        self.occluder_area_frac = min(
-            0.95,
-            max(0.05, float(getattr(settings_snapshot, "segment_occluder_area_frac", OCCLUDER_AREA_FRAC))),
-        )
+        self.epsilon = self.match_iou_thresh
+        self.text_ocr_backend = str(getattr(settings_snapshot, "text_ocr_backend", TEXT_OCR_BACKEND)).strip().lower()
+        self.text_ocr_model = str(getattr(settings_snapshot, "text_ocr_model", TEXT_OCR_MODEL))
+        if self.text_ocr_backend == "paddle":
+            self._ensure_local_recognizer()
 
 
     def segment_regions_only(self, img):
@@ -152,6 +194,13 @@ class Segmenter:
             tar.extractall(path=self.model_base)
         os.remove(tar_path)
         self._log_info(f"Model extracted to {self.model_base}")
+
+    def _ensure_local_recognizer(self):
+        if self.recognizer is not None:
+            return self.recognizer
+        self._ensure_model()
+        self.recognizer = self._load_recognizer()
+        return self.recognizer
 
     def _load_recognizer(self):
         self._log_info("Loading PaddleOCR model...")
@@ -333,6 +382,9 @@ class Segmenter:
             overlap_over_min = inter / float(min(area_a, area_b))
             area_ratio = min(area_a, area_b) / float(max(area_a, area_b))
 
+            if overlap_over_min >= BOX_MERGE_CONTAINMENT_MIN:
+                return True
+
             return (
                 overlap_over_min >= BOX_MERGE_OVERLAP_MIN
                 and area_ratio >= BOX_MERGE_AREA_RATIO_MIN
@@ -409,9 +461,113 @@ class Segmenter:
 
         return iou, center_dist_frac, area_ratio, aspect_ratio
 
+    def _containment_overlap(self, bbox_a, bbox_b):
+        ax, ay, aw, ah = map(int, bbox_a)
+        bx, by, bw, bh = map(int, bbox_b)
+        inter_x1 = max(ax, bx)
+        inter_y1 = max(ay, by)
+        inter_x2 = min(ax + aw, bx + bw)
+        inter_y2 = min(ay + ah, by + bh)
+        inter_w = max(0, inter_x2 - inter_x1)
+        inter_h = max(0, inter_y2 - inter_y1)
+        inter_area = inter_w * inter_h
+        min_area = max(1, min(max(1, aw * ah), max(1, bw * bh)))
+        return inter_area / float(min_area)
+
+    def _reference_bbox(self, region):
+        anchor_bbox = region.get("anchor_bbox")
+        if anchor_bbox and len(anchor_bbox) == 4:
+            return [int(v) for v in anchor_bbox]
+        return [int(v) for v in region.get("bbox", (0, 0, 0, 0))]
+
+    def _keepalive_min_age(self, region):
+        display_label = str(region.get("display_label", region.get("label", "diagram")))
+        return DIAGRAM_KEEPALIVE_MIN_AGE if display_label == "diagram" else KEEPALIVE_MIN_AGE
+
+    def _missing_confirm_limit(self, region):
+        base = MISSING_CONFIRM_FRAMES
+        keepalive_min_age = self._keepalive_min_age(region)
+        age = max(0, int(region.get("age", 1)) - keepalive_min_age)
+        seen_count = max(0, int(region.get("seen_count", 1)) - keepalive_min_age)
+        bonus = (age // MISSING_CONFIRM_AGE_STEP) + (seen_count // MISSING_CONFIRM_SEEN_STEP)
+        return min(MAX_MISSING_CONFIRM_FRAMES, base + bonus)
+
+    def _smoothed_bbox(self, prev_bbox, new_bbox, smoothing=ANCHOR_SMOOTHING):
+        if not prev_bbox or len(prev_bbox) != 4:
+            return [int(v) for v in new_bbox]
+
+        smoothing = min(1.0, max(0.0, float(smoothing)))
+        inv = 1.0 - smoothing
+        return [
+            int(round((float(prev_bbox[idx]) * inv) + (float(new_bbox[idx]) * smoothing)))
+            for idx in range(4)
+        ]
+
+    def _should_refresh_anchor_bbox(self, prev_region, new_bbox):
+        ref_bbox = self._reference_bbox(prev_region)
+        iou, center_dist_frac, area_ratio, aspect_ratio = self._bbox_match_metrics(ref_bbox, new_bbox)
+        return (
+            iou >= ANCHOR_UPDATE_IOU_MIN
+            or (
+                center_dist_frac <= ANCHOR_UPDATE_CENTER_DIST_FRAC
+                and area_ratio >= ANCHOR_UPDATE_AREA_RATIO_MIN
+                and aspect_ratio >= ANCHOR_UPDATE_ASPECT_RATIO_MIN
+            )
+        )
+
+    def _next_anchor_bbox(self, prev_region, new_bbox):
+        if not self._should_refresh_anchor_bbox(prev_region, new_bbox):
+            return self._reference_bbox(prev_region)
+        return self._smoothed_bbox(self._reference_bbox(prev_region), new_bbox)
+
+    def _is_duplicate_candidate(self, prev_region, new_bbox):
+        ref_bbox = self._reference_bbox(prev_region)
+        iou, center_dist_frac, area_ratio, aspect_ratio = self._bbox_match_metrics(ref_bbox, new_bbox)
+        return (
+            iou >= DUPLICATE_SUPPRESSION_IOU
+            or (
+                center_dist_frac <= DUPLICATE_SUPPRESSION_CENTER_DIST_FRAC
+                and area_ratio >= DUPLICATE_SUPPRESSION_AREA_RATIO_MIN
+                and aspect_ratio >= DUPLICATE_SUPPRESSION_ASPECT_RATIO_MIN
+            )
+        )
+
+    def _should_suppress_duplicate_new_region(self, new_bbox, used_prev_idxs):
+        for idx, prev in enumerate(self.prev_regions):
+            if not self._is_recoverable_region(prev):
+                continue
+
+            missing_streak = int(prev.get("missing_streak", 0))
+            if missing_streak <= 0 and idx not in used_prev_idxs:
+                continue
+
+            if self._is_duplicate_candidate(prev, new_bbox):
+                return True
+
+        return False
+
+    def _is_absorbed_by_active_region(self, prev_region, active_regions):
+        prev_bbox = self._reference_bbox(prev_region)
+        prev_area = max(1, int(prev_bbox[2]) * int(prev_bbox[3]))
+
+        for active in active_regions:
+            active_bbox = active.get("bbox")
+            if not active_bbox or len(active_bbox) != 4:
+                continue
+
+            active_area = max(1, int(active_bbox[2]) * int(active_bbox[3]))
+            if active_area < prev_area:
+                continue
+
+            containment = self._containment_overlap(prev_bbox, active_bbox)
+            if containment >= ABSORB_CONTAINMENT_MIN:
+                return True
+
+        return False
+
     def _is_recoverable_region(self, region):
         display_label = str(region.get("display_label", region.get("label", "diagram")))
-        min_age = DIAGRAM_KEEPALIVE_MIN_AGE if display_label == "diagram" else KEEPALIVE_MIN_AGE
+        min_age = self._keepalive_min_age(region)
         return display_label in ("text", "equation", "diagram") and int(region.get("age", 1)) >= min_age
 
     def _recovery_score(self, prev_region, new_bbox):
@@ -422,7 +578,10 @@ class Segmenter:
         if missing_streak <= 0 and self.recovery_frames_remaining <= 0:
             return None
 
-        iou, center_dist_frac, area_ratio, aspect_ratio = self._bbox_match_metrics(prev_region["bbox"], new_bbox)
+        iou, center_dist_frac, area_ratio, aspect_ratio = self._bbox_match_metrics(
+            self._reference_bbox(prev_region),
+            new_bbox,
+        )
         if center_dist_frac > RECOVERY_CENTER_DIST_FRAC:
             return None
         if area_ratio < RECOVERY_AREA_RATIO_MIN:
@@ -430,12 +589,15 @@ class Segmenter:
         if aspect_ratio < RECOVERY_ASPECT_RATIO_MIN:
             return None
 
-        return (
+        score = (
             0.55 * area_ratio
             + 0.30 * aspect_ratio
             + 0.15 * max(0.0, 1.0 - (center_dist_frac / RECOVERY_CENTER_DIST_FRAC))
             + 0.50 * iou
         )
+        if score < RECOVERY_SCORE_MIN:
+            return None
+        return score
 
     def _compare_and_score(self, img, new_boxes):
         results = []
@@ -522,7 +684,7 @@ class Segmenter:
 
             matched_region = None
             matched_prev_idx = None
-            if best_prev is not None and best_iou >= MATCH_IOU_THRESH:
+            if best_prev is not None and best_iou >= self.match_iou_thresh:
                 matched_region = best_prev
                 matched_prev_idx = best_prev_idx
             elif best_recovery_prev is not None:
@@ -536,8 +698,12 @@ class Segmenter:
             # Case 1: New region => DO NOT OCR YET
             # -----------------------------
             if matched_region is None:
+                if self._should_suppress_duplicate_new_region(new_bbox, used_prev_idxs):
+                    continue
+
                 results.append({
                     "bbox": new_bbox,
+                    "anchor_bbox": list(new_bbox),
                     "region_id": self._next_region_id,
                     "raw_label": "diagram",      # classifier label (ungated)
                     "label": "diagram",          # gated label shown downstream
@@ -563,6 +729,7 @@ class Segmenter:
             # -----------------------------
             result = matched_region.copy()
             result["bbox"] = new_bbox
+            result["anchor_bbox"] = self._next_anchor_bbox(matched_region, new_bbox)
             result["status"] = "existing"
             result["missing_streak"] = 0
             result.setdefault("first_seen_time", now)    # in case old state lacks it
@@ -585,6 +752,7 @@ class Segmenter:
                 if age >= NEW_REGION_MIN_AGE_S or result["seen_count"] >= NEW_REGION_MIN_HITS:
                     ocr = self._ocr_single_region(img, new_bbox, status="new")
                     ocr["region_id"] = int(result["region_id"])
+                    ocr["anchor_bbox"] = list(result["anchor_bbox"])
                     ocr["first_seen_time"] = float(result["first_seen_time"])
                     ocr["seen_count"] = int(result["seen_count"])
                     ocr["has_ocr"] = True
@@ -617,6 +785,7 @@ class Segmenter:
             if changed or elapsed >= OCR_INTERVAL:
                 ocr = self._ocr_single_region(img, new_bbox, status="existing")
                 ocr["region_id"] = int(result["region_id"])
+                ocr["anchor_bbox"] = list(result["anchor_bbox"])
                 ocr["first_seen_time"] = float(result["first_seen_time"])
                 ocr["seen_count"] = int(result["seen_count"])
                 ocr["has_ocr"] = True
@@ -640,7 +809,7 @@ class Segmenter:
                     continue
 
                 disp = str(prev.get("display_label", prev.get("label", "diagram")))
-                min_age = DIAGRAM_KEEPALIVE_MIN_AGE if disp == "diagram" else KEEPALIVE_MIN_AGE
+                min_age = self._keepalive_min_age(prev)
                 is_keepalive = (
                     disp in ("text", "equation", "diagram")
                     and int(prev.get("age", 1)) >= min_age
@@ -649,11 +818,15 @@ class Segmenter:
                 if not is_keepalive:
                     continue
 
+                if self._is_absorbed_by_active_region(prev, results):
+                    continue
+
                 ghost = prev.copy()
                 ghost["missing_streak"] = int(prev.get("missing_streak", 0)) + 1
                 ghost["status"] = "missing"
+                ghost.setdefault("anchor_bbox", self._reference_bbox(prev))
 
-                if ghost["missing_streak"] < MISSING_CONFIRM_FRAMES:
+                if ghost["missing_streak"] <= self._missing_confirm_limit(prev):
                     # Hold last known display label/content
                     ghost["label"] = disp
                     ghost["display_label"] = disp
@@ -770,13 +943,23 @@ class Segmenter:
         timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
 
         try:
-            output = self.recognizer.predict(tmp_path)
-            elapsed = time.perf_counter() - start_time
+            if self.text_ocr_backend == "trocr_endpoint":
+                response = self._call_text_ocr_endpoint(crop)
+                elapsed = time.perf_counter() - start_time
+                text = str(response.get("prediction_text", "") or "")
+                conf = response.get("confidence", response.get("prediction_confidence", 0.0))
+                try:
+                    conf = float(conf) if conf is not None else 0.0
+                except (TypeError, ValueError):
+                    conf = 0.0
+            else:
+                output = self._ensure_local_recognizer().predict(tmp_path)
+                elapsed = time.perf_counter() - start_time
 
-            # Parse recognition result
-            result = output[0] if isinstance(output[0], dict) else vars(output[0])
-            text = result.get("rec_text", "")
-            conf = result.get("rec_score", 0.0)
+                # Parse recognition result
+                result = output[0] if isinstance(output[0], dict) else vars(output[0])
+                text = result.get("rec_text", "")
+                conf = result.get("rec_score", 0.0)
 
         except Exception as e:
             elapsed = time.perf_counter() - start_time
@@ -807,10 +990,30 @@ class Segmenter:
             "label": label,
             "confidence": round(conf, 3),
             "text_preview": text,
+            "text_ocr_backend": self.text_ocr_backend,
+            "text_ocr_model": self.text_ocr_model,
             "status": status,
             "timestamp": timestamp,
             "ocr_time_s": round(elapsed, 3)
         }
+
+    def _call_text_ocr_endpoint(self, crop):
+        ok, buffer = cv2.imencode(".png", crop)
+        if not ok:
+            raise RuntimeError("Failed to encode text OCR crop as PNG.")
+
+        params = urllib.parse.urlencode({
+            "model": self.text_ocr_model,
+        })
+        request = urllib.request.Request(
+            f"{self.text_ocr_url}?{params}",
+            data=buffer.tobytes(),
+            method="POST",
+            headers={"Content-Type": "application/octet-stream"},
+        )
+        with urllib.request.urlopen(request, timeout=30.0) as response:
+            body = response.read().decode("utf-8")
+        return json.loads(body)
 
     def _score_regions(self, img, boxes, status="new"):
         # Run OCR on all regions with a uniform status (used for first frame)
@@ -818,6 +1021,7 @@ class Segmenter:
         for box in boxes:
             region = self._ocr_single_region(img, box, status)
             region["region_id"] = self._next_region_id
+            region["anchor_bbox"] = [int(v) for v in box]
             self._next_region_id += 1
             scored.append(region)
         return scored

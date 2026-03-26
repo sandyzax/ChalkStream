@@ -1,3 +1,5 @@
+"""Canonical content objects and simple board-space rendering helpers."""
+
 from enum import Enum
 from typing import Any, Dict, List, Optional
 from dataclasses import dataclass
@@ -38,6 +40,7 @@ class Content:
     age: Optional[int] = None
 
     diagram_content: Optional[DiagramContent] = None
+    image_content: Optional[Any] = None
     latex_content: Optional[Dict[str, Any]] = None  # later
 
     def to_dict(self) -> Dict[str, Any]:

@@ -1,7 +1,4 @@
-"""
-Utilities for selecting and confirming the four board corners.
-Auto-detect if possible, then let the user drag handles to adjust.
-"""
+"""OpenCV-based corner selection with an editable fallback over auto-detection."""
 import cv2
 import numpy as np
 from typing import Optional
@@ -10,7 +7,7 @@ from segmentation.board_isolation import auto_detect_board_corners
 
 
 class CornerEditor:
-    """Simple OpenCV UI to drag 4 points and confirm/reset/abort."""
+    """Small editor that lets the user adjust the four board corners by hand."""
 
     def __init__(self, frame: np.ndarray, initial_corners: np.ndarray):
         self.frame = frame
@@ -20,6 +17,7 @@ class CornerEditor:
         self.radius = 12
 
     def _draw_overlay(self) -> np.ndarray:
+        """Draw the current corner polygon and a short interaction hint."""
         vis = self.frame.copy()
         cv2.polylines(vis, [self.corners.astype(int)], True, (0, 255, 0), 2)
         for i, (x, y) in enumerate(self.corners):
@@ -40,11 +38,13 @@ class CornerEditor:
         return vis
 
     def _nearest_corner(self, x: int, y: int) -> Optional[int]:
+        """Return the closest draggable handle to the current mouse position."""
         dists = np.linalg.norm(self.corners - np.array([x, y], dtype=np.float32), axis=1)
         idx = int(np.argmin(dists))
         return idx if dists[idx] <= self.radius * 1.5 else None
 
     def _on_mouse(self, event, x, y, flags, param):
+        """Handle simple click-and-drag corner edits."""
         if event == cv2.EVENT_LBUTTONDOWN:
             idx = self._nearest_corner(x, y)
             if idx is not None:
@@ -55,6 +55,7 @@ class CornerEditor:
             self.dragging_idx = None
 
     def edit(self) -> Optional[np.ndarray]:
+        """Show the editor until the user confirms, resets, or aborts."""
         cv2.namedWindow(self.window, cv2.WINDOW_NORMAL)
         cv2.resizeWindow(self.window, 1600, 900)
         cv2.setMouseCallback(self.window, self._on_mouse)
@@ -76,6 +77,7 @@ class CornerEditor:
 
 
 def _initial_corners_from_frame(frame: np.ndarray) -> np.ndarray:
+    """Build a generous default rectangle when auto-detection is unavailable."""
     h, w = frame.shape[:2]
     return np.array(
         [
@@ -89,26 +91,22 @@ def _initial_corners_from_frame(frame: np.ndarray) -> np.ndarray:
 
 
 def auto_detect_corners(frame: np.ndarray) -> Optional[np.ndarray]:
+    """Run the automatic board detector and return ordered corners if it succeeds."""
     return auto_detect_board_corners(frame)
 
 
 
 def select_board_corners(frame: np.ndarray) -> Optional[np.ndarray]:
-    """
-    Try auto-detect; open drag UI to confirm/adjust.
-    Returns 4x2 float32 corners (TL, TR, BR, BL) or None if aborted.
-    """
-    # 1. Auto-detect corners (if fails, fallback to box)
+    """Try auto-detection first, then let the user confirm or refine the result."""
     try:
         auto_corners = auto_detect_corners(frame)
     except Exception as exc:
         print(f"[WARN] Auto-detection failed: {exc}")
         auto_corners = None
 
-    # 2. Initial guess
+    # If detection misses, start from a rectangle covering most of the frame.
     initial = auto_corners if auto_corners is not None else _initial_corners_from_frame(frame)
 
-    # 3. Go directly into the draggable editor
     editor = CornerEditor(frame, initial)
     corners = editor.edit()
 
@@ -116,7 +114,7 @@ def select_board_corners(frame: np.ndarray) -> Optional[np.ndarray]:
         print("[INFO] Corner selection aborted by user.")
         return None
 
-    # 4. Always return ordered corners (TL, TR, BR, BL)
+    # Always hand the rest of the pipeline a clean TL, TR, BR, BL ordering.
     from segmentation.board_isolation import order_corners
     return order_corners(corners.astype(np.float32))
 

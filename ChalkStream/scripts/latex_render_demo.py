@@ -1,3 +1,5 @@
+"""Quick local demo for rendering LaTeX into a Qt graphics scene."""
+
 import io
 import matplotlib.pyplot as plt
 
@@ -6,17 +8,19 @@ from PySide6.QtWidgets import QGraphicsPixmapItem
 
 
 class LatexGraphicsItem(QGraphicsPixmapItem):
+    """Tiny demo item that renders a LaTeX string once at construction time."""
+
     def __init__(self, latex, parent=None):
         pixmap = self.render_latex(latex)
         super().__init__(pixmap, parent)
 
-        # make it behave like QGraphicsTextItem
         self.setFlags(
             QGraphicsPixmapItem.ItemIsMovable |
             QGraphicsPixmapItem.ItemIsSelectable 
         )
 
     def render_latex(self, latex):
+        """Render a single LaTeX string into a transparent pixmap."""
         fig = plt.figure()
         fig.text(0, 0, f"${latex}$")
 

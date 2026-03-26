@@ -1,3 +1,5 @@
+"""Runtime coordinator that turns frames into normalized canvas content updates."""
+
 import cv2
 import os
 import time
@@ -9,18 +11,16 @@ from datetime import datetime
 from pathlib import Path
 
 import numpy as np
-from core import RunConsole
+from core import RunConsole, camera_resolution_label, load_app_settings, open_configured_camera_capture
 
 from preprocessing.corner_selection import select_board_corners
 from preprocessing.preprocessing import noise_removal
 from segmentation.board_isolation import warp_board
-from segmentation.segmenter import Segmenter
-from diagram_vectorization.Diagram_Vectorization_Cam import (
-    skeletonize_fast_skimage,
-    trace_polylines,
-    prune_isolated_pixels,
-    polylines_to_diagram_content,
-    mask_from_array,
+from segmentation.segmenter import OCR_INTERVAL, Segmenter
+from diagram_vectorization.vectorization import (
+    DEFAULT_VECTORIZATION_METHOD,
+    normalize_vectorization_method,
+    vectorize_region,
 )
 from diagram_vectorization.content_presentation import (
     Content,
@@ -29,21 +29,54 @@ from diagram_vectorization.content_presentation import (
     draw_text_in_bbox,
 )
 
-EQUATION_OCR_URL = os.environ.get("CHALKSTREAM_EQUATION_OCR_URL", "http://127.0.0.1:8010/infer")
-EQUATION_OCR_MODEL = os.environ.get("CHALKSTREAM_EQUATION_OCR_MODEL", "trained")
-EQUATION_OCR_SEGMENT_INTERVAL = max(1, int(os.environ.get("CHALKSTREAM_EQUATION_OCR_SEGMENT_INTERVAL", "4")))
-EQUATION_OCR_MIN_REGION_AGE = max(2, int(os.environ.get("CHALKSTREAM_EQUATION_OCR_MIN_REGION_AGE", "2")))
-EQUATION_OCR_MIN_CONFIDENCE = float(os.environ.get("CHALKSTREAM_EQUATION_OCR_MIN_CONFIDENCE", "0.70"))
-EQUATION_OCR_LABEL_OVERRIDE_CONFIDENCE = float(
-    os.environ.get("CHALKSTREAM_EQUATION_OCR_LABEL_OVERRIDE_CONFIDENCE", "0.90")
+ORCHESTRATION_SETTINGS = load_app_settings().get("orchestration", {})
+
+EQUATION_OCR_URL = os.environ.get(
+    "CHALKSTREAM_EQUATION_OCR_URL",
+    str(ORCHESTRATION_SETTINGS.get("equation_ocr_url", "http://127.0.0.1:8010/infer")),
 )
-EQUATION_OCR_TIMEOUT_S = float(os.environ.get("CHALKSTREAM_EQUATION_OCR_TIMEOUT_S", "120"))
-EQUATION_OCR_MAX_GEN_LENGTH = max(8, int(os.environ.get("CHALKSTREAM_EQUATION_OCR_MAX_GEN_LENGTH", "128")))
-EQUATION_OCR_NUM_BEAMS = min(8, max(1, int(os.environ.get("CHALKSTREAM_EQUATION_OCR_NUM_BEAMS", "1"))))
-SEGMENT_INTERVAL_S = 1 / 2
-PREVIEW_INTERVAL_S = 1 / 10
-CONSOLE_SUMMARY_INTERVAL_SEGMENTS = max(1, int(os.environ.get("CHALKSTREAM_CONSOLE_SUMMARY_INTERVAL_SEGMENTS", "4")))
-VERBOSE_REGION_OCR = os.environ.get("CHALKSTREAM_VERBOSE_REGION_OCR", "").strip().lower() in {"1", "true", "yes", "on"}
+EQUATION_OCR_MODEL = os.environ.get(
+    "CHALKSTREAM_EQUATION_OCR_MODEL",
+    str(ORCHESTRATION_SETTINGS.get("equation_ocr_model", "Trained_V3")),
+)
+EQUATION_OCR_SEGMENT_INTERVAL = max(
+    1,
+    int(os.environ.get("CHALKSTREAM_EQUATION_OCR_SEGMENT_INTERVAL", str(ORCHESTRATION_SETTINGS.get("equation_ocr_segment_interval", 4)))),
+)
+EQUATION_OCR_MIN_REGION_AGE = max(
+    2,
+    int(os.environ.get("CHALKSTREAM_EQUATION_OCR_MIN_REGION_AGE", str(ORCHESTRATION_SETTINGS.get("equation_ocr_min_region_age", 2)))),
+)
+EQUATION_OCR_MIN_CONFIDENCE = float(
+    os.environ.get("CHALKSTREAM_EQUATION_OCR_MIN_CONFIDENCE", str(ORCHESTRATION_SETTINGS.get("equation_ocr_min_confidence", 0.70)))
+)
+EQUATION_OCR_LABEL_OVERRIDE_CONFIDENCE = float(
+    os.environ.get(
+        "CHALKSTREAM_EQUATION_OCR_LABEL_OVERRIDE_CONFIDENCE",
+        str(ORCHESTRATION_SETTINGS.get("equation_ocr_label_override_confidence", 0.95)),
+    )
+)
+EQUATION_OCR_TIMEOUT_S = float(
+    os.environ.get("CHALKSTREAM_EQUATION_OCR_TIMEOUT_S", str(ORCHESTRATION_SETTINGS.get("equation_ocr_timeout_s", 120.0)))
+)
+EQUATION_OCR_MAX_GEN_LENGTH = max(
+    8,
+    int(os.environ.get("CHALKSTREAM_EQUATION_OCR_MAX_GEN_LENGTH", str(ORCHESTRATION_SETTINGS.get("equation_ocr_max_gen_length", 128)))),
+)
+EQUATION_OCR_NUM_BEAMS = min(
+    8,
+    max(1, int(os.environ.get("CHALKSTREAM_EQUATION_OCR_NUM_BEAMS", str(ORCHESTRATION_SETTINGS.get("equation_ocr_num_beams", 1))))),
+)
+SEGMENT_INTERVAL_S = float(ORCHESTRATION_SETTINGS.get("segment_interval_s", 0.5))
+PREVIEW_INTERVAL_S = float(ORCHESTRATION_SETTINGS.get("preview_interval_s", 0.1))
+CONSOLE_SUMMARY_INTERVAL_SEGMENTS = max(
+    1,
+    int(ORCHESTRATION_SETTINGS.get("console_summary_interval_segments", 4)),
+)
+VERBOSE_REGION_OCR = bool(ORCHESTRATION_SETTINGS.get("verbose_region_ocr", False))
+DIAGRAM_VECTORIZATION_METHOD = normalize_vectorization_method(
+    ORCHESTRATION_SETTINGS.get("diagram_vectorization_method", DEFAULT_VECTORIZATION_METHOD)
+)
 LABEL_PRIORITY = {
     "diagram": 0,
     "text": 1,
@@ -55,24 +88,8 @@ SEGMENTATION_FRAME_JSON = SEGMENTATION_ARTIFACT_DIR / "frame0.json"
 SEGMENTATION_FRAME_VIS = SEGMENTATION_ARTIFACT_DIR / "frame0.jpg"
 
 
-def _offset_polylines_to_global(polylines_local, x0: int, y0: int):
-    out = []
-    for poly in polylines_local:
-        out_poly = []
-        for pt in poly:
-            out_poly.append([float(x0 + pt[0]), float(y0 + pt[1])])
-        out.append(out_poly)
-    return out
-
-
-def _vectorize_region(crop, x0: int, y0: int):
-    mask = mask_from_array(crop)
-    skel = skeletonize_fast_skimage(mask)
-    skel = prune_isolated_pixels(skel)
-
-    polylines_yx, _nodes = trace_polylines(skel)
-    polylines_local_xy = polylines_to_diagram_content(polylines_yx)
-    return _offset_polylines_to_global(polylines_local_xy, x0=x0, y0=y0)
+def _vectorize_region(crop, x0: int, y0: int, method):
+    return vectorize_region(crop, x0=x0, y0=y0, method=method)
 
 
 def _normalize_latex(latex):
@@ -154,6 +171,8 @@ def _build_region_metadata(region, content_type, processing_clock_s, runtime_sta
         "classification_mode": _get_classification_mode(interaction_state),
         "region_label_override": _get_region_label_override(region, interaction_state),
         "raw_label": str(region.get("raw_label", region.get("label", "diagram"))),
+        "text_ocr_backend": str(region.get("text_ocr_backend", "")),
+        "text_ocr_model": str(region.get("text_ocr_model", "")),
         "content_type": content_type.name,
         "status": str(region.get("status", "existing")),
         "confidence": effective_confidence,
@@ -346,6 +365,22 @@ def _combine_text_preview(members):
     return " ".join(previews)[:128]
 
 
+def _build_merge_member_signature(members):
+    signature = []
+    for member in members:
+        signature.append({
+            "region_id": int(member.get("region_id", -1)),
+            "status": str(member.get("status", "existing")),
+            "raw_label": str(member.get("raw_label", member.get("label", "diagram"))),
+            "display_label": str(member.get("display_label", member.get("label", "diagram"))),
+            "text_preview": str(member.get("text_preview", "")).strip()[:128],
+            "bbox": [int(v) for v in member.get("bbox", (0, 0, 0, 0))],
+            "last_ocr_time": member.get("last_ocr_time"),
+        })
+    signature.sort(key=lambda entry: entry["region_id"])
+    return signature
+
+
 def _coalesce_regions_with_manual_merges(regions, merge_groups, interaction_state=None):
     if not merge_groups:
         return regions
@@ -395,6 +430,7 @@ def _coalesce_regions_with_manual_merges(regions, merge_groups, interaction_stat
             else max(int(member.get("missing_streak", 0)) for member in members)
         )
         merged_region["source_region_ids"] = source_region_ids
+        merged_region["merge_source_signature"] = _build_merge_member_signature(members)
 
         if interaction_state is not None:
             interaction_state.upsert_merge(merged_region_id, source_region_ids, bbox=merged_bbox)
@@ -418,9 +454,9 @@ def _equation_crop_to_png_bytes(crop):
     return buffer.tobytes()
 
 
-def _call_equation_ocr(crop):
+def _call_equation_ocr(crop, equation_ocr_model):
     params = urllib.parse.urlencode({
-        "model": EQUATION_OCR_MODEL,
+        "model": str(equation_ocr_model or EQUATION_OCR_MODEL),
         "include_confidence": "true",
         "max_gen_length": EQUATION_OCR_MAX_GEN_LENGTH,
         "num_beams": EQUATION_OCR_NUM_BEAMS,
@@ -437,7 +473,116 @@ def _call_equation_ocr(crop):
     return json.loads(body)
 
 
-def _update_equation_ocr_state(warped, region, equation_ocr_state, segmentation_index, debug_console=None, interaction_state=None):
+def _merged_region_runtime_signature(region):
+    bbox = tuple(int(v) for v in region.get("bbox", (0, 0, 0, 0)))
+    source_ids = tuple(int(source_id) for source_id in region.get("source_region_ids", []) if int(source_id) > 0)
+    members = tuple(
+        (
+            int(member.get("region_id", -1)),
+            str(member.get("status", "existing")),
+            str(member.get("raw_label", member.get("display_label", member.get("label", "diagram")))),
+            str(member.get("display_label", member.get("label", "diagram"))),
+            str(member.get("text_preview", "")).strip()[:128],
+            tuple(int(v) for v in member.get("bbox", (0, 0, 0, 0))),
+            str(member.get("last_ocr_time", "")),
+        )
+        for member in region.get("merge_source_signature", [])
+    )
+    return {
+        "bbox": bbox,
+        "source_ids": source_ids,
+        "members": members,
+    }
+
+
+def _apply_merged_lightweight_ocr_result(region, ocr_result):
+    if not ocr_result:
+        return region
+
+    updated = dict(region)
+    label = _normalize_region_label(ocr_result.get("raw_label", ocr_result.get("label", "diagram")))
+    updated["raw_label"] = label
+    updated["label"] = label
+    updated["display_label"] = label
+    updated["confidence"] = float(ocr_result.get("confidence", region.get("confidence", 0.0)))
+    updated["text_preview"] = str(ocr_result.get("text_preview", "")).strip()[:128]
+    updated["timestamp"] = str(ocr_result.get("timestamp", region.get("timestamp", "")))
+    updated["ocr_time_s"] = ocr_result.get("ocr_time_s", region.get("ocr_time_s"))
+    updated["last_ocr_time"] = ocr_result.get("last_ocr_time", region.get("last_ocr_time"))
+    return updated
+
+
+def _refresh_merged_region_ocr(warped, region, runtime_state, segmenter):
+    if segmenter is None or not region.get("source_region_ids"):
+        return region
+
+    region_id = int(region.get("region_id", -1))
+    state = runtime_state.get(region_id)
+    if state is None:
+        state = {}
+        runtime_state[region_id] = state
+
+    cached_result = dict(state.get("merged_lightweight_ocr_result") or {})
+    source_signature = _merged_region_runtime_signature(region)
+    status = str(region.get("status", "existing")).lower()
+
+    if status == "missing":
+        return _apply_merged_lightweight_ocr_result(region, cached_result)
+
+    now = time.time()
+    last_ocr_time = float(state.get("merged_lightweight_last_ocr_time", 0.0) or 0.0)
+    should_attempt = (
+        not cached_result
+        or state.get("merged_lightweight_signature") != source_signature
+        or (last_ocr_time <= 0.0)
+        or (now - last_ocr_time) >= OCR_INTERVAL
+    )
+
+    if should_attempt:
+        x, y, w, h = map(int, region.get("bbox", (0, 0, 0, 0)))
+        if w > 1 and h > 1 and x >= 0 and y >= 0 and (x + w) <= warped.shape[1] and (y + h) <= warped.shape[0]:
+            ocr_result = segmenter._ocr_single_region(warped, (x, y, w, h), status=region.get("status", "existing"))
+            cached_result = {
+                "raw_label": str(ocr_result.get("raw_label", ocr_result.get("label", "diagram"))),
+                "label": str(ocr_result.get("label", ocr_result.get("raw_label", "diagram"))),
+                "confidence": float(ocr_result.get("confidence", 0.0)),
+                "text_preview": str(ocr_result.get("text_preview", "")).strip()[:128],
+                "timestamp": str(ocr_result.get("timestamp", region.get("timestamp", ""))),
+                "ocr_time_s": ocr_result.get("ocr_time_s"),
+                "last_ocr_time": now,
+            }
+            state["merged_lightweight_ocr_result"] = dict(cached_result)
+            state["merged_lightweight_signature"] = source_signature
+            state["merged_lightweight_last_ocr_time"] = now
+
+    return _apply_merged_lightweight_ocr_result(region, cached_result)
+
+
+def _equation_source_signature(region):
+    bbox = region.get("anchor_bbox") or region.get("bbox") or (0, 0, 0, 0)
+    x, y, w, h = [int(v) for v in bbox]
+    quant = 12
+    return {
+        "raw_label": str(region.get("raw_label", region.get("label", "diagram"))).strip().lower(),
+        "text_preview": str(region.get("text_preview", "")).strip(),
+        "bbox": [
+            int(round(x / quant) * quant),
+            int(round(y / quant) * quant),
+            int(round(w / quant) * quant),
+            int(round(h / quant) * quant),
+        ],
+    }
+
+
+def _update_equation_ocr_state(
+    warped,
+    region,
+    equation_ocr_state,
+    segmentation_index,
+    debug_console=None,
+    interaction_state=None,
+    equation_ocr_model=None,
+):
     region_id = int(region.get("region_id", -1))
     state = equation_ocr_state.get(region_id)
     if state is None:
@@ -460,8 +605,19 @@ def _update_equation_ocr_state(warped, region, equation_ocr_state, segmentation_
             "last_error": None,
             "last_reported_error": None,
             "render_ready": False,
+            "source_signature": None,
+            "source_revision": 0,
+            "accepted_source_revision": None,
         }
         equation_ocr_state[region_id] = state
+
+    current_source_signature = _equation_source_signature(region)
+    previous_source_signature = state.get("source_signature")
+    if previous_source_signature is None:
+        state["source_signature"] = current_source_signature
+    elif previous_source_signature != current_source_signature:
+        state["source_signature"] = current_source_signature
+        state["source_revision"] = int(state.get("source_revision", 0)) + 1
 
     should_attempt = _is_equation_ocr_candidate(region, interaction_state=interaction_state)
     if should_attempt:
@@ -473,7 +629,7 @@ def _update_equation_ocr_state(warped, region, equation_ocr_state, segmentation_
             state["last_attempt_segment"] = segmentation_index
             state["last_attempt_time"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
             try:
-                response = _call_equation_ocr(crop)
+                response = _call_equation_ocr(crop, equation_ocr_model=equation_ocr_model)
                 prediction_latex = _normalize_latex(response.get("prediction_latex"))
                 confidence, confidence_details = _parse_equation_ocr_confidence(response.get("confidence"))
                 state["last_response_latex"] = prediction_latex or None
@@ -490,12 +646,32 @@ def _update_equation_ocr_state(warped, region, equation_ocr_state, segmentation_
                     state["last_success_segment"] = segmentation_index
                     best_confidence = state.get("confidence")
                     replaced_best = best_confidence is not None
+                    accepted_source_revision = state.get("accepted_source_revision")
+                    source_revision = int(state.get("source_revision", 0))
+                    source_changed_since_accept = (
+                        accepted_source_revision is None
+                        or int(source_revision) > int(accepted_source_revision)
+                    )
+                    accepted_latex = _normalize_latex(state.get("prediction_latex"))
+                    should_replace = False
                     if best_confidence is None or float(confidence) > float(best_confidence):
+                        should_replace = True
+                    elif (
+                        source_changed_since_accept
+                        and prediction_latex != accepted_latex
+                    ):
+                        should_replace = True
+
+                    if should_replace:
                         state["prediction_latex"] = prediction_latex
                         state["confidence"] = confidence
                         state["confidence_details"] = confidence_details
+                        state["accepted_source_revision"] = source_revision
                         if debug_console is not None:
                             debug_console.equation_ocr_accept(region_id, confidence, prediction_latex, replaced_best=replaced_best)
+                    elif source_changed_since_accept and prediction_latex == accepted_latex:
+                        # Content was refreshed and revalidated without changing the accepted equation.
+                        state["accepted_source_revision"] = source_revision
                 state["render_ready"] = bool(state.get("prediction_latex"))
             except Exception as exc:
                 state["last_error"] = str(exc)
@@ -507,10 +683,25 @@ def _update_equation_ocr_state(warped, region, equation_ocr_state, segmentation_
     return state
 
 
-def _regions_to_contents(warped, regions, equation_ocr_state, segmentation_index, processing_clock_s, runtime_state, debug_console=None, interaction_state=None):
+def _regions_to_contents(
+    warped,
+    regions,
+    equation_ocr_state,
+    segmentation_index,
+    processing_clock_s,
+    runtime_state,
+    segmenter=None,
+    debug_console=None,
+    interaction_state=None,
+    vectorization_method=DIAGRAM_VECTORIZATION_METHOD,
+    equation_ocr_model=EQUATION_OCR_MODEL,
+):
     contents = []
 
     for fallback_id, region in enumerate(regions):
+        if region.get("source_region_ids"):
+            region = _refresh_merged_region_ocr(warped, region, runtime_state, segmenter)
+
         text_preview = str(region.get("text_preview", "")).strip()
         bbox = region.get("bbox")
         if bbox is None:
@@ -537,6 +728,7 @@ def _regions_to_contents(warped, regions, equation_ocr_state, segmentation_index
                 segmentation_index,
                 debug_console=debug_console,
                 interaction_state=interaction_state,
+                equation_ocr_model=equation_ocr_model,
             )
 
         label = _resolve_effective_label(region, equation_state, interaction_state=interaction_state)
@@ -569,6 +761,7 @@ def _regions_to_contents(warped, regions, equation_ocr_state, segmentation_index
 
         content_type = ContentType.MATH if label.startswith("equation") else ContentType.DIAGRAM
         diagram = None
+        vectorized_image = None
         latex_content = None
 
         if content_type == ContentType.MATH and equation_state and equation_state.get("render_ready"):
@@ -580,8 +773,18 @@ def _regions_to_contents(warped, regions, equation_ocr_state, segmentation_index
             }
         else:
             crop = warped[y:y + h, x:x + w]
-            polylines_global_xy = _vectorize_region(crop, x0=x, y0=y)
-            diagram = DiagramContent(polylines=polylines_global_xy)
+            vectorization_result = _vectorize_region(
+                crop,
+                x0=x,
+                y0=y,
+                method=vectorization_method,
+            )
+            polylines_global_xy = vectorization_result.get("polylines") or []
+            vectorized_image = vectorization_result.get("image")
+            if vectorized_image is not None:
+                diagram = None
+            else:
+                diagram = DiagramContent(polylines=polylines_global_xy)
 
         content = Content(
                 id=content_id,
@@ -592,6 +795,7 @@ def _regions_to_contents(warped, regions, equation_ocr_state, segmentation_index
                 status=status,
                 timestamp=timestamp_str,
                 diagram_content=diagram,
+                image_content=vectorized_image,
                 latex_content=latex_content,
                 age=age,
             )
@@ -613,6 +817,20 @@ def _render_content_to_canvas_payload(content):
     if w <= 1 or h <= 1:
         return None
 
+    if content.content_type == ContentType.WORDS:
+        render_size = max(10, int(round(max(h, 1) * 0.35)))
+        return {
+            "id": int(content.id),
+            "type": "text",
+            "content": content.text_preview,
+            "size": render_size,
+            "x": x,
+            "y": y,
+            "width": w,
+            "height": h,
+            "metadata": getattr(content, "region_metadata", {}),
+        }
+
     if content.content_type == ContentType.MATH and content.latex_content:
         latex = _normalize_latex(content.latex_content.get("latex"))
         if latex:
@@ -629,18 +847,19 @@ def _render_content_to_canvas_payload(content):
                 "metadata": getattr(content, "region_metadata", {}),
             }
 
+    if getattr(content, "image_content", None) is not None:
+        return {
+            "id": int(content.id),
+            "type": "image",
+            "content": content.image_content,
+            "x": x,
+            "y": y,
+            "metadata": getattr(content, "region_metadata", {}),
+        }
+
     canvas_image = np.full((h, w, 3), 255, dtype=np.uint8)
 
-    if content.content_type == ContentType.WORDS:
-        draw_text_in_bbox(
-            canvas_image,
-            content.text_preview,
-            (0, 0, w, h),
-            height_fill=0.70,
-            margin_frac=0.08,
-            wrap=True,
-        )
-    else:
+    if content.content_type != ContentType.WORDS:
         polylines = []
         if content.diagram_content is not None:
             polylines = content.diagram_content.polylines
@@ -681,7 +900,19 @@ def _emit_canvas_updates(gui, contents, active_ids):
     return current_ids
 
 
-def run_orchestrator(corners, gui=None, video_path: str = "pipeline/Test3.mp4", stop_event=None, show_debug=False, runtime_settings=None, interaction_state=None, debug_console=None):
+def run_orchestrator(
+    corners,
+    gui=None,
+    video_path: str = "pipeline/Test3.mp4",
+    stop_event=None,
+    show_debug=False,
+    runtime_settings=None,
+    interaction_state=None,
+    debug_console=None,
+    pause_event=None,
+    vectorization_method=DIAGRAM_VECTORIZATION_METHOD,
+    equation_ocr_model=EQUATION_OCR_MODEL,
+):
     """
     Full pipeline:
     1. Load video.
@@ -691,8 +922,18 @@ def run_orchestrator(corners, gui=None, video_path: str = "pipeline/Test3.mp4", 
     5. Run segmentation (2 FPS).
     6. Display visualization live.
     """
-    cap = cv2.VideoCapture(video_path)
-    ok, first_frame = cap.read()
+    camera_capture_info = None
+    if isinstance(video_path, int):
+        settings_snapshot = runtime_settings.snapshot() if runtime_settings is not None else None
+        camera_resolution_option = getattr(settings_snapshot, "camera_resolution_option", "max")
+        cap, camera_capture_info, first_frame = open_configured_camera_capture(
+            video_path,
+            resolution_option=camera_resolution_option,
+        )
+        ok = first_frame is not None
+    else:
+        cap = cv2.VideoCapture(video_path)
+        ok, first_frame = cap.read()
     if not ok:
         raise FileNotFoundError(f"Could not read video: {video_path}")
     source_fps = float(cap.get(cv2.CAP_PROP_FPS) or 0.0)
@@ -714,6 +955,9 @@ def run_orchestrator(corners, gui=None, video_path: str = "pipeline/Test3.mp4", 
             verbose_ocr=VERBOSE_REGION_OCR,
         )
 
+    vectorization_method = normalize_vectorization_method(vectorization_method)
+    equation_ocr_model = str(equation_ocr_model or EQUATION_OCR_MODEL)
+
     seg = Segmenter(
         use_english_model=True,
         logger=debug_console,
@@ -733,8 +977,17 @@ def run_orchestrator(corners, gui=None, video_path: str = "pipeline/Test3.mp4", 
         segment_interval_s=SEGMENT_INTERVAL_S,
         preview_interval_s=PREVIEW_INTERVAL_S,
         equation_ocr_url=EQUATION_OCR_URL,
-        equation_ocr_model=EQUATION_OCR_MODEL,
+        equation_ocr_model=equation_ocr_model,
+        vectorization_method=vectorization_method,
     )
+    if camera_capture_info is not None:
+        actual_width = int(camera_capture_info.get("actual_width") or 0)
+        actual_height = int(camera_capture_info.get("actual_height") or 0)
+        if actual_width > 0 and actual_height > 0:
+            debug_console.info(
+                f"Camera {int(video_path)} capture negotiated at {actual_width}x{actual_height} "
+                f"using {camera_resolution_label(camera_capture_info.get('requested_option'))}."
+            )
 
     frame_idx = 0
     last_seg_time = 0
@@ -749,9 +1002,17 @@ def run_orchestrator(corners, gui=None, video_path: str = "pipeline/Test3.mp4", 
     equation_ocr_state = {}
     region_runtime_state = {}
     last_preview_time = 0
+    preprocess_count = 0
 
     # Step 3: Process video frames
     while True:
+        if stop_event is not None and stop_event.is_set():
+            break
+
+        while pause_event is not None and not pause_event.is_set() and frame_idx > 0:
+            if stop_event is not None and stop_event.is_set():
+                break
+            time.sleep(0.05)
         if stop_event is not None and stop_event.is_set():
             break
 
@@ -765,10 +1026,20 @@ def run_orchestrator(corners, gui=None, video_path: str = "pipeline/Test3.mp4", 
         # Apply professor-filter logic and throttle professor filtering to interval
         now = time.time()
         settings_snapshot = runtime_settings.snapshot() if runtime_settings is not None else None
+        current_vectorization_method = vectorization_method
+        current_equation_ocr_model = equation_ocr_model
+        if settings_snapshot is not None:
+            current_vectorization_method = normalize_vectorization_method(
+                getattr(settings_snapshot, "vectorization_method", current_vectorization_method)
+            )
+            current_equation_ocr_model = str(
+                getattr(settings_snapshot, "equation_ocr_model", current_equation_ocr_model)
+            )
         if now - last_filter_time >= NOISE_INTERVAL:
             prof_filtered = noise_removal(warped, settings_snapshot=settings_snapshot)
             last_filtered_frame = prof_filtered
             last_filter_time = now
+            preprocess_count += 1
         else:
             # reuse last filtered frame to avoid blocking
             prof_filtered = last_filtered_frame
@@ -796,14 +1067,17 @@ def run_orchestrator(corners, gui=None, video_path: str = "pipeline/Test3.mp4", 
             if gui is not None:
                 contents = _regions_to_contents(
                     warped,
-                    current_regions,
-                    equation_ocr_state,
-                    segmentation_index,
-                    processing_clock_s,
-                    region_runtime_state,
-                    debug_console=debug_console,
-                    interaction_state=interaction_state,
-                )
+                current_regions,
+                equation_ocr_state,
+                segmentation_index,
+                processing_clock_s,
+                region_runtime_state,
+                segmenter=seg,
+                debug_console=debug_console,
+                interaction_state=interaction_state,
+                vectorization_method=current_vectorization_method,
+                equation_ocr_model=current_equation_ocr_model,
+            )
                 active_ids = _emit_canvas_updates(gui, contents, active_ids)
                 stale_ids = set(equation_ocr_state) - active_ids
                 for stale_id in stale_ids:
@@ -824,6 +1098,12 @@ def run_orchestrator(corners, gui=None, video_path: str = "pipeline/Test3.mp4", 
             last_seg_time = now
         else:
             vis = last_vis if last_vis is not None else prof_filtered
+
+        debug_console.throughput(
+            now_s=now,
+            preprocess_count=preprocess_count,
+            segmentation_count=segmentation_index,
+        )
 
         if gui is not None and hasattr(gui, "preview_frame") and now - last_preview_time >= PREVIEW_INTERVAL:
             gui.preview_frame.emit({

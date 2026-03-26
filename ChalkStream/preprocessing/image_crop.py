@@ -1,7 +1,10 @@
+"""Small manual crop-and-warp experiment kept for quick visual checks."""
+
 import cv2
 import numpy as np
 from pathlib import Path
 
+# Hard-coded points used by the original experiment script.
 pts = np.array([
     [101, 86],  # top-left      [0]
     [538, 87],  # top-right     [1]

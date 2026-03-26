@@ -1,6 +1,5 @@
-"""
-Entrypoint for ChalkStream: drive orchestration
-"""
+"""Launch the ChalkStream desktop application."""
+
 from canvas import run_gui
 
 

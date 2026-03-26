@@ -1,28 +1,32 @@
+"""Prototype preprocessing helpers used during board rectification and filtering."""
+
 import cv2
 import mediapipe as mp
 import numpy as np
-from core import RuntimeSettingsSnapshot
+from core import RuntimeSettingsSnapshot, load_app_settings
 
-#Pre-Initialized variable
+
+PREPROCESSING_SETTINGS = load_app_settings().get("preprocessing", {})
+
+# This module still keeps a simple demo capture path for standalone experiments.
 cap = cv2.VideoCapture("Test2.mp4")
 
-# placeholder for now. Disable auto lighting adjustment. Require Logitech C920/C922 camera
 """ 
 current_exposure = cap.get(cv2.CAP_PROP_EXPOSURE)
 cap.set(cv2.CAP_PROP_AUTO_EXPOSURE, 0.25)
 cap.set(cv2.CAP_PROP_EXPOSURE, current_exposure)
 """
 
-# board resize:
-
-
 def board_resize(frame):
+    """Apply the currently configured board warp matrix to a frame."""
     return cv2.warpPerspective(frame, board_resize.M, (board_resize.maxWidth, board_resize.maxHeight))
 
 
-# noise removal:
-DEFAULT_PREPROCESS_HISTORY = 50
-DEFAULT_PREPROCESS_VAR_THRESHOLD = 25.0
+DEFAULT_PREPROCESS_HISTORY = int(PREPROCESSING_SETTINGS.get("history", 50))
+DEFAULT_PREPROCESS_VAR_THRESHOLD = float(PREPROCESSING_SETTINGS.get("var_threshold", 25.0))
+PERSON_MASK_THRESHOLD = float(PREPROCESSING_SETTINGS.get("person_mask_threshold", 0.4))
+PERSON_MASK_EROSION_KERNEL = max(1, int(PREPROCESSING_SETTINGS.get("person_mask_erosion_kernel", 18)))
+MOTION_MASK_DILATION_KERNEL = max(1, int(PREPROCESSING_SETTINGS.get("motion_mask_dilation_kernel", 18)))
 _noise_settings = {
     "history": DEFAULT_PREPROCESS_HISTORY,
     "var_threshold": DEFAULT_PREPROCESS_VAR_THRESHOLD,
@@ -30,6 +34,7 @@ _noise_settings = {
 
 
 def _create_background_subtractor(history, var_threshold):
+    """Create the background subtractor used to suppress transient motion."""
     return cv2.createBackgroundSubtractorMOG2(
         history=int(history),
         varThreshold=float(var_threshold),
@@ -45,6 +50,7 @@ mp_selfie_segmentation = mp.solutions.selfie_segmentation.SelfieSegmentation(mod
 
 
 def _ensure_background_subtractor(settings_snapshot=None):
+    """Rebuild the subtractor only when the live settings actually change."""
     global fgbg
 
     if settings_snapshot is None:
@@ -67,17 +73,24 @@ def _ensure_background_subtractor(settings_snapshot=None):
 
 
 def noise_removal(frame, settings_snapshot=None):
-    #filter out people
+    """Remove people and motion while keeping the most recent stable board state."""
+    # Mask out people first so they do not pollute the board image.
     rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
     result = mp_selfie_segmentation.process(rgb)
-    mask = cv2.bitwise_not((result.segmentation_mask > 0.4).astype('uint8') * 255)
-    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (18,18))
+    mask = cv2.bitwise_not((result.segmentation_mask > PERSON_MASK_THRESHOLD).astype('uint8') * 255)
+    kernel = cv2.getStructuringElement(
+        cv2.MORPH_ELLIPSE,
+        (PERSON_MASK_EROSION_KERNEL, PERSON_MASK_EROSION_KERNEL),
+    )
     shrunk_mask = cv2.erode(mask, kernel, iterations=1)
     people_filtered = cv2.bitwise_and(frame, frame, mask=shrunk_mask)
 
-    #filter out movements
+    # Then suppress new motion with background subtraction.
     fgmask = _ensure_background_subtractor(settings_snapshot).apply(people_filtered)
-    kernel2 = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (18,18))
+    kernel2 = cv2.getStructuringElement(
+        cv2.MORPH_ELLIPSE,
+        (MOTION_MASK_DILATION_KERNEL, MOTION_MASK_DILATION_KERNEL),
+    )
     shrunk_mask2 = cv2.dilate(fgmask, kernel2, iterations=1)
     bgmask = cv2.bitwise_not(shrunk_mask2)
     movement_filtered = cv2.bitwise_and(people_filtered, people_filtered, mask=bgmask)
@@ -89,11 +102,12 @@ def noise_removal(frame, settings_snapshot=None):
     noise_removal.previous_frame = final_image
     return final_image
 
-# grey scale
 def grey_scale(frame):
+    """Convert a BGR frame to grayscale."""
     return cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
 
 def run(pts):
+    """Standalone demo entrypoint for the older preprocessing experiment."""
     widthA = np.linalg.norm(pts[3] - pts[2])
     widthB = np.linalg.norm(pts[1] - pts[0])
     board_resize.maxWidth = int(max(widthA, widthB))
@@ -120,7 +134,6 @@ def run(pts):
         
         cropped = board_resize(frame)
         noise_filtered = noise_removal(cropped)
-        # greyed = grey_scale(noise_filtered)
         cv2.imshow('Original', frame)
         cv2.imshow('Professor Filtered', noise_filtered)
 
@@ -137,5 +150,3 @@ if __name__ == "__main__":
         [103,303]   # bottom-left   [3]
     ], dtype="float32")
     run(pts)
-
-    
