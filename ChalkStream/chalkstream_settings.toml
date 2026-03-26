@@ -33,7 +33,7 @@ kernel_height_frac = 0.025
 min_area_pct = 0.0005
 
 # Maximum candidate box area as a fraction of the board area.
-max_area_pct = 0.50
+max_area_pct = 0.60
 
 # Seconds between lightweight OCR refreshes for an existing region.
 ocr_interval_s = 5.0

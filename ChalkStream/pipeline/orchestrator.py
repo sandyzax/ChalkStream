@@ -558,6 +558,36 @@ def _refresh_merged_region_ocr(warped, region, runtime_state, segmenter):
     return _apply_merged_lightweight_ocr_result(region, cached_result)
 
 
+def _refresh_region_lightweight_ocr(ocr_source, region, segmenter):
+    if segmenter is None or ocr_source is None:
+        return region
+
+    x, y, w, h = map(int, region.get("bbox", (0, 0, 0, 0)))
+    if w <= 1 or h <= 1 or x < 0 or y < 0 or (x + w) > ocr_source.shape[1] or (y + h) > ocr_source.shape[0]:
+        return region
+
+    refreshed = segmenter._ocr_single_region(
+        ocr_source,
+        (x, y, w, h),
+        status=region.get("status", "existing"),
+    )
+    updated = dict(region)
+    updated.update({
+        "bbox": [x, y, w, h],
+        "raw_label": refreshed.get("raw_label", region.get("raw_label")),
+        "label": refreshed.get("label", region.get("label")),
+        "display_label": refreshed.get("label", region.get("display_label", region.get("label"))),
+        "confidence": refreshed.get("confidence", region.get("confidence")),
+        "text_preview": refreshed.get("text_preview", region.get("text_preview", "")),
+        "text_ocr_backend": refreshed.get("text_ocr_backend", region.get("text_ocr_backend", "")),
+        "text_ocr_model": refreshed.get("text_ocr_model", region.get("text_ocr_model", "")),
+        "timestamp": refreshed.get("timestamp", region.get("timestamp")),
+        "ocr_time_s": refreshed.get("ocr_time_s", region.get("ocr_time_s")),
+        "last_ocr_time": time.time(),
+    })
+    return updated
+
+
 def _equation_source_signature(region):
     bbox = region.get("anchor_bbox") or region.get("bbox") or (0, 0, 0, 0)
     x, y, w, h = [int(v) for v in bbox]
@@ -582,6 +612,7 @@ def _update_equation_ocr_state(
     debug_console=None,
     interaction_state=None,
     equation_ocr_model=None,
+    force=False,
 ):
     region_id = int(region.get("region_id", -1))
     state = equation_ocr_state.get(region_id)
@@ -622,7 +653,7 @@ def _update_equation_ocr_state(
     should_attempt = _is_equation_ocr_candidate(region, interaction_state=interaction_state)
     if should_attempt:
         last_attempt_segment = state.get("last_attempt_segment")
-        if last_attempt_segment is None or (segmentation_index - int(last_attempt_segment)) >= EQUATION_OCR_SEGMENT_INTERVAL:
+        if force or last_attempt_segment is None or (segmentation_index - int(last_attempt_segment)) >= EQUATION_OCR_SEGMENT_INTERVAL:
             x, y, w, h = map(int, region.get("bbox", (0, 0, 0, 0)))
             crop = warped[y:y + h, x:x + w]
             state["attempt_count"] = int(state.get("attempt_count", 0)) + 1
@@ -695,12 +726,23 @@ def _regions_to_contents(
     interaction_state=None,
     vectorization_method=DIAGRAM_VECTORIZATION_METHOD,
     equation_ocr_model=EQUATION_OCR_MODEL,
+    ocr_source=None,
+    force_refresh_region_ids=None,
 ):
     contents = []
+    force_refresh_region_ids = {
+        int(region_id) for region_id in (force_refresh_region_ids or set())
+    }
+    ocr_source = warped if ocr_source is None else ocr_source
 
     for fallback_id, region in enumerate(regions):
+        content_id = int(region.get("region_id", fallback_id))
+        force_refresh = content_id in force_refresh_region_ids
+
         if region.get("source_region_ids"):
             region = _refresh_merged_region_ocr(warped, region, runtime_state, segmenter)
+        elif force_refresh:
+            region = _refresh_region_lightweight_ocr(ocr_source, region, segmenter)
 
         text_preview = str(region.get("text_preview", "")).strip()
         bbox = region.get("bbox")
@@ -713,7 +755,6 @@ def _regions_to_contents(
         if x < 0 or y < 0 or (x + w) > warped.shape[1] or (y + h) > warped.shape[0]:
             continue
 
-        content_id = int(region.get("region_id", fallback_id))
         timestamp_str = str(region.get("timestamp", datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]))
         status = str(region.get("status", "existing"))
         confidence = float(region.get("confidence", 0.0))
@@ -729,6 +770,7 @@ def _regions_to_contents(
                 debug_console=debug_console,
                 interaction_state=interaction_state,
                 equation_ocr_model=equation_ocr_model,
+                force=force_refresh,
             )
 
         label = _resolve_effective_label(region, equation_state, interaction_state=interaction_state)
@@ -900,6 +942,98 @@ def _emit_canvas_updates(gui, contents, active_ids):
     return current_ids
 
 
+def _refresh_requested_regions(
+    gui,
+    refresh_region_ids,
+    warped,
+    prof_filtered,
+    current_regions,
+    equation_ocr_state,
+    segmentation_index,
+    processing_clock_s,
+    runtime_state,
+    segmenter=None,
+    debug_console=None,
+    interaction_state=None,
+    vectorization_method=DIAGRAM_VECTORIZATION_METHOD,
+    equation_ocr_model=EQUATION_OCR_MODEL,
+):
+    if gui is None or not refresh_region_ids or not current_regions:
+        if gui is None or not refresh_region_ids:
+            return current_regions
+
+    target_ids = {int(region_id) for region_id in refresh_region_ids}
+    available_regions = list(current_regions or [])
+    available_ids = {int(region.get("region_id", -1)) for region in available_regions}
+    missing_ids = target_ids - available_ids
+    if missing_ids and segmenter is not None:
+        raw_regions = list(getattr(segmenter, "prev_regions", []) or [])
+        if interaction_state is not None:
+            merge_groups = interaction_state.snapshot_merges()
+            raw_regions = _coalesce_regions_with_manual_merges(
+                raw_regions,
+                merge_groups,
+                interaction_state=interaction_state,
+            )
+        available_regions = raw_regions
+        current_regions = raw_regions
+
+    refreshed_by_id = {}
+    target_regions = [
+        dict(region)
+        for region in available_regions
+        if int(region.get("region_id", -1)) in target_ids
+    ]
+    if not target_regions:
+        return current_regions
+
+    refreshed_contents = _regions_to_contents(
+        warped,
+        target_regions,
+        equation_ocr_state,
+        segmentation_index,
+        processing_clock_s,
+        runtime_state,
+        segmenter=segmenter,
+        debug_console=debug_console,
+        interaction_state=interaction_state,
+        vectorization_method=vectorization_method,
+        equation_ocr_model=equation_ocr_model,
+        ocr_source=prof_filtered,
+        force_refresh_region_ids=target_ids,
+    )
+
+    for content in refreshed_contents:
+        payload = _render_content_to_canvas_payload(content)
+        if payload is None:
+            continue
+        gui.load_content.emit(payload)
+        metadata = dict(getattr(content, "region_metadata", {}) or {})
+        refreshed_region = next(
+            (dict(region) for region in target_regions if int(region.get("region_id", -1)) == int(content.id)),
+            None,
+        )
+        if refreshed_region is None:
+            continue
+        refreshed_region["raw_label"] = str(metadata.get("raw_label", refreshed_region.get("raw_label", refreshed_region.get("label", "diagram"))))
+        refreshed_region["display_label"] = str(metadata.get("classification", refreshed_region.get("display_label", refreshed_region.get("label", "diagram"))))
+        refreshed_region["label"] = refreshed_region["display_label"]
+        refreshed_region["confidence"] = float(metadata.get("lightweight_confidence", refreshed_region.get("confidence", 0.0)) or 0.0)
+        refreshed_region["text_preview"] = str(getattr(content, "text_preview", refreshed_region.get("text_preview", "")) or "")
+        refreshed_region["text_ocr_backend"] = metadata.get("text_ocr_backend", refreshed_region.get("text_ocr_backend", ""))
+        refreshed_region["text_ocr_model"] = metadata.get("text_ocr_model", refreshed_region.get("text_ocr_model", ""))
+        refreshed_by_id[int(content.id)] = refreshed_region
+
+    if not refreshed_by_id:
+        return current_regions
+
+    updated_regions = []
+    for region in current_regions:
+        region_id = int(region.get("region_id", -1))
+        updated_regions.append(refreshed_by_id.get(region_id, region))
+    return updated_regions
+
+
 def run_orchestrator(
     corners,
     gui=None,
@@ -912,6 +1046,7 @@ def run_orchestrator(
     pause_event=None,
     vectorization_method=DIAGRAM_VECTORIZATION_METHOD,
     equation_ocr_model=EQUATION_OCR_MODEL,
+    refresh_request_getter=None,
 ):
     """
     Full pipeline:
@@ -1004,6 +1139,15 @@ def run_orchestrator(
     region_runtime_state = {}
     last_preview_time = 0
     preprocess_count = 0
+    frame_interval_s = 1.0 / max(source_fps, 1e-9)
+    playback_clock_started_s = time.perf_counter()
+    paused_accumulated_s = 0.0
+    pause_started_s = None
+    current_warped = first_warped.copy()
+    current_filtered = first_warped.copy()
+    current_regions = []
+    processing_clock_s = 0.0
+    reached_end_of_source = False
 
     # Step 3: Process video frames
     while True:
@@ -1011,18 +1155,53 @@ def run_orchestrator(
             break
 
         while pause_event is not None and not pause_event.is_set() and frame_idx > 0:
+            if pause_started_s is None:
+                pause_started_s = time.perf_counter()
+            if refresh_request_getter is not None:
+                refresh_region_ids = refresh_request_getter()
+                if refresh_region_ids:
+                    current_regions = _refresh_requested_regions(
+                        gui,
+                        refresh_region_ids,
+                        current_warped,
+                        current_filtered,
+                        current_regions,
+                        equation_ocr_state,
+                        segmentation_index,
+                        processing_clock_s,
+                        region_runtime_state,
+                        segmenter=seg,
+                        debug_console=debug_console,
+                        interaction_state=interaction_state,
+                        vectorization_method=current_vectorization_method if 'current_vectorization_method' in locals() else vectorization_method,
+                        equation_ocr_model=current_equation_ocr_model if 'current_equation_ocr_model' in locals() else equation_ocr_model,
+                    )
             if stop_event is not None and stop_event.is_set():
                 break
             time.sleep(0.05)
+        if pause_started_s is not None:
+            paused_accumulated_s += time.perf_counter() - pause_started_s
+            pause_started_s = None
         if stop_event is not None and stop_event.is_set():
             break
 
+        # Keep file playback and live capture processing aligned with the source FPS.
+        # Without this, recordings run as fast as the worker can read frames.
+        if frame_idx > 0 and source_fps > 0:
+            target_elapsed_s = frame_idx * frame_interval_s
+            actual_elapsed_s = time.perf_counter() - playback_clock_started_s - paused_accumulated_s
+            ahead_s = target_elapsed_s - actual_elapsed_s
+            if ahead_s > 0:
+                time.sleep(ahead_s)
+
         ret, frame = cap.read()
         if not ret:
+            reached_end_of_source = True
             break
         
         # Rectify
         warped = warp_board(frame, corners)
+        current_warped = warped.copy()
 
         # Apply professor-filter logic and throttle professor filtering to interval
         now = time.time()
@@ -1044,6 +1223,8 @@ def run_orchestrator(
         else:
             # reuse last filtered frame to avoid blocking
             prof_filtered = last_filtered_frame
+        if prof_filtered is not None:
+            current_filtered = prof_filtered.copy()
 
         # Throttle segmentation interval
         now = time.time()
@@ -1100,6 +1281,26 @@ def run_orchestrator(
         else:
             vis = last_vis if last_vis is not None else prof_filtered
 
+        if refresh_request_getter is not None:
+            refresh_region_ids = refresh_request_getter()
+            if refresh_region_ids:
+                current_regions = _refresh_requested_regions(
+                    gui,
+                    refresh_region_ids,
+                    current_warped,
+                    current_filtered,
+                    current_regions,
+                    equation_ocr_state,
+                    segmentation_index,
+                    processing_clock_s,
+                    region_runtime_state,
+                    segmenter=seg,
+                    debug_console=debug_console,
+                    interaction_state=interaction_state,
+                    vectorization_method=current_vectorization_method,
+                    equation_ocr_model=current_equation_ocr_model,
+                )
+
         debug_console.throughput(
             now_s=now,
             preprocess_count=preprocess_count,
@@ -1126,6 +1327,28 @@ def run_orchestrator(
                 break
 
         frame_idx += 1
+
+    if reached_end_of_source and gui is not None and refresh_request_getter is not None:
+        while stop_event is None or not stop_event.is_set():
+            refresh_region_ids = refresh_request_getter()
+            if refresh_region_ids:
+                current_regions = _refresh_requested_regions(
+                    gui,
+                    refresh_region_ids,
+                    current_warped,
+                    current_filtered,
+                    current_regions,
+                    equation_ocr_state,
+                    segmentation_index,
+                    processing_clock_s,
+                    region_runtime_state,
+                    segmenter=seg,
+                    debug_console=debug_console,
+                    interaction_state=interaction_state,
+                    vectorization_method=current_vectorization_method if 'current_vectorization_method' in locals() else vectorization_method,
+                    equation_ocr_model=current_equation_ocr_model if 'current_equation_ocr_model' in locals() else equation_ocr_model,
+                )
+            time.sleep(0.05)
 
     cap.release()
     if gui is None or show_debug:

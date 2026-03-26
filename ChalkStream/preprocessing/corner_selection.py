@@ -57,7 +57,7 @@ class CornerEditor:
     def edit(self) -> Optional[np.ndarray]:
         """Show the editor until the user confirms, resets, or aborts."""
         cv2.namedWindow(self.window, cv2.WINDOW_NORMAL)
-        cv2.resizeWindow(self.window, 1600, 900)
+        cv2.setWindowProperty(self.window, cv2.WND_PROP_FULLSCREEN, cv2.WINDOW_FULLSCREEN)
         cv2.setMouseCallback(self.window, self._on_mouse)
         original = self.corners.copy()
         while True:

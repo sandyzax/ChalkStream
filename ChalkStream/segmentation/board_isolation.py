@@ -7,6 +7,7 @@ BOARD_ASPECT_RATIO_OPTIONS = (
     (16.0, 9.0),
     (3.0, 2.0),
 )
+AUTO_DETECT_CORNER_INSET_FRAC = 0.015
 
 
 def auto_detect_board_corners(bgr):
@@ -48,7 +49,8 @@ def auto_detect_board_corners(bgr):
     # If several quadrilaterals survive, prefer the largest one.
     best = max(candidates, key=lambda c: cv2.contourArea(c))
 
-    return order_corners(best.astype("float32"))
+    ordered = order_corners(best.astype("float32"))
+    return tighten_detected_corners(ordered)
 
 
 
@@ -65,6 +67,34 @@ def order_corners(pts):
     ordered[3] = pts[np.argmax(diff)]   # bottom-left
 
     return ordered
+
+
+def tighten_detected_corners(corners, inset_frac=AUTO_DETECT_CORNER_INSET_FRAC):
+    """Pull an auto-detected board polygon slightly inward.
+
+    The detector often lands on the outside board border or a bright frame edge.
+    A small inward nudge keeps the warp inside the writing surface more reliably
+    without asking the user to correct the corners by hand every time.
+    """
+    ordered = order_corners(np.asarray(corners, dtype="float32"))
+    tl, tr, br, bl = ordered
+
+    width = max(float(np.linalg.norm(tr - tl)), float(np.linalg.norm(br - bl)), 1.0)
+    height = max(float(np.linalg.norm(bl - tl)), float(np.linalg.norm(br - tr)), 1.0)
+    inset = max(1.0, min(width, height) * float(inset_frac))
+    center = ordered.mean(axis=0)
+
+    tightened = []
+    for point in ordered:
+        direction = center - point
+        length = float(np.linalg.norm(direction))
+        if length <= 1e-6:
+            tightened.append(point.copy())
+            continue
+        move = min(inset, length * 0.5)
+        tightened.append(point + (direction / length) * move)
+
+    return order_corners(np.asarray(tightened, dtype="float32"))
 
 
 def estimate_board_size(corners):

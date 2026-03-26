@@ -8,7 +8,7 @@ import re
 import os
 import base64
 from pathlib import Path
-from threading import Event
+from threading import Event, Lock
 from PySide6.QtCore import QPointF
 from PySide6.QtWidgets import (
     QApplication,
@@ -456,11 +456,18 @@ def format_bbox(bbox):
 
 def proximity_fraction_to_slider_value(fraction):
     fraction = float(fraction or 0.0)
-    return max(1, min(15, int(round(fraction * 100.0))))
+    return max(2, min(30, int(round(fraction * 200.0))))
 
 
 def proximity_slider_value_to_fraction(value):
-    return max(0.01, min(0.15, float(value) / 100.0))
+    return max(0.01, min(0.15, float(value) / 200.0))
+
+
+def proximity_slider_value_to_label(value):
+    display_value = float(value) / 2.0
+    if abs(display_value - round(display_value)) < 1e-9:
+        return str(int(round(display_value)))
+    return f"{display_value:.1f}"
 
 
 def build_selection_metadata_text(metadata):
@@ -750,7 +757,7 @@ class VideoSelectionDialog(QDialog):
         self.current_category = None
 
         self.setWindowTitle("Open ChalkStream")
-        self.resize(860, 540)
+        self.setWindowState(self.windowState() | Qt.WindowMaximized)
 
         root_layout = QVBoxLayout(self)
         root_layout.setContentsMargins(20, 18, 20, 18)
@@ -1714,6 +1721,10 @@ class CanvasView(QGraphicsView):
 
         self.setRenderHint(QPainter.Antialiasing)
         self.setRenderHint(QPainter.SmoothPixmapTransform)
+        self.setTransformationAnchor(QGraphicsView.AnchorViewCenter)
+        self.setResizeAnchor(QGraphicsView.AnchorViewCenter)
+        self.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
 
         self.setDragMode(QGraphicsView.RubberBandDrag)
         self.contents = {}
@@ -1727,6 +1738,26 @@ class CanvasView(QGraphicsView):
         self._active_interaction_item_ids = set()
         self._deferred_item_events = {}
         self.base_payloads = {}
+
+        # The board scene is defined in board coordinates, which is often much
+        # larger than the window. Keep the whole board fitted to the available
+        # viewport so the user is not forced to pan left and right just to see it.
+        self._fit_scene_to_viewport()
+
+    def _fit_scene_to_viewport(self):
+        scene_rect = self.scene.sceneRect()
+        viewport_rect = self.viewport().rect()
+        if scene_rect.isEmpty() or viewport_rect.isEmpty():
+            return
+        self.fitInView(scene_rect, Qt.KeepAspectRatio)
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self._fit_scene_to_viewport()
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        self._fit_scene_to_viewport()
 
     def allocate_manual_id(self):
         manual_id = self.next_manual_id
@@ -2400,6 +2431,7 @@ class MainWindow(QMainWindow):
         self.current_board_name = None
 
         self.setWindowTitle("Board")
+        self.setWindowState(self.windowState() | Qt.WindowMaximized)
 
         #Main interface
         central_widget = QWidget()
@@ -2519,13 +2551,13 @@ class MainWindow(QMainWindow):
         button_layout.addWidget(self.settings_group)
 
         self.kernel_width_slider = QSlider(Qt.Horizontal)
-        self.kernel_width_slider.setRange(1, 15)
+        self.kernel_width_slider.setRange(2, 30)
         self.kernel_width_slider.setSingleStep(1)
         self.kernel_width_slider.setPageStep(1)
-        self.kernel_width_slider.setTickInterval(1)
+        self.kernel_width_slider.setTickInterval(2)
         self.kernel_width_slider.setTickPosition(QSlider.TicksBelow)
         self.kernel_width_value_label = QLabel("1")
-        self.kernel_width_value_label.setMinimumWidth(24)
+        self.kernel_width_value_label.setMinimumWidth(32)
         kernel_width_widget = QWidget()
         kernel_width_layout = QHBoxLayout(kernel_width_widget)
         kernel_width_layout.setContentsMargins(0, 0, 0, 0)
@@ -2535,13 +2567,13 @@ class MainWindow(QMainWindow):
         settings_layout.addRow("Horizontal Handwriting Proximity", kernel_width_widget)
 
         self.kernel_height_slider = QSlider(Qt.Horizontal)
-        self.kernel_height_slider.setRange(1, 15)
+        self.kernel_height_slider.setRange(2, 30)
         self.kernel_height_slider.setSingleStep(1)
         self.kernel_height_slider.setPageStep(1)
-        self.kernel_height_slider.setTickInterval(1)
+        self.kernel_height_slider.setTickInterval(2)
         self.kernel_height_slider.setTickPosition(QSlider.TicksBelow)
         self.kernel_height_value_label = QLabel("1")
-        self.kernel_height_value_label.setMinimumWidth(24)
+        self.kernel_height_value_label.setMinimumWidth(32)
         kernel_height_widget = QWidget()
         kernel_height_layout = QHBoxLayout(kernel_height_widget)
         kernel_height_layout.setContentsMargins(0, 0, 0, 0)
@@ -2652,6 +2684,7 @@ class MainWindow(QMainWindow):
         self._content_editor_context = {}
         self._content_editor_dirty = False
         self._programmatic_content_editor_update = False
+        self.region_refresh_callback = None
         self.set_selection_metadata_visible(self.selection_metadata_visible)
 
         button_layout.addStretch()
@@ -2677,7 +2710,6 @@ class MainWindow(QMainWindow):
         ])
         main_layout.addWidget(self.main_splitter, 1)
 
-        self.resize(max(1100, int(dimension_x) + 380), max(720, int(dimension_y) + 80))
         self.metadata_refresh_timer = QTimer(self)
         self.metadata_refresh_timer.setInterval(250)
         self.metadata_refresh_timer.timeout.connect(self.update_selection_metadata)
@@ -2856,6 +2888,9 @@ class MainWindow(QMainWindow):
     def set_pause_toggle_callback(self, callback):
         self.pause_toggle_callback = callback
 
+    def set_region_refresh_callback(self, callback):
+        self.region_refresh_callback = callback
+
     def _update_playback_button_state(self):
         if self.playback_paused:
             button_label = "Start Playback" if not self.playback_started else "Resume Playback"
@@ -2911,6 +2946,10 @@ class MainWindow(QMainWindow):
 
     def merge_selected(self):
         merged = self.view.merge_selected()
+        if merged and self.region_refresh_callback is not None:
+            region_id = self._selected_region_id()
+            if region_id is not None:
+                self.region_refresh_callback(region_id)
         if not merged:
             QMessageBox.information(
                 self,
@@ -3046,10 +3085,10 @@ class MainWindow(QMainWindow):
         slider_value = int(slider_value)
         fraction = proximity_slider_value_to_fraction(slider_value)
         if axis == "width":
-            self.kernel_width_value_label.setText(str(slider_value))
+            self.kernel_width_value_label.setText(proximity_slider_value_to_label(slider_value))
             self.runtime_settings.update(segment_kernel_width_frac=fraction)
         else:
-            self.kernel_height_value_label.setText(str(slider_value))
+            self.kernel_height_value_label.setText(proximity_slider_value_to_label(slider_value))
             self.runtime_settings.update(segment_kernel_height_frac=fraction)
 
     def _load_runtime_settings_into_controls(self):
@@ -3059,11 +3098,11 @@ class MainWindow(QMainWindow):
         self.kernel_width_slider.blockSignals(True)
         self.kernel_width_slider.setValue(kernel_width_value)
         self.kernel_width_slider.blockSignals(False)
-        self.kernel_width_value_label.setText(str(kernel_width_value))
+        self.kernel_width_value_label.setText(proximity_slider_value_to_label(kernel_width_value))
         self.kernel_height_slider.blockSignals(True)
         self.kernel_height_slider.setValue(kernel_height_value)
         self.kernel_height_slider.blockSignals(False)
-        self.kernel_height_value_label.setText(str(kernel_height_value))
+        self.kernel_height_value_label.setText(proximity_slider_value_to_label(kernel_height_value))
 
         controls = (
             (self.segment_match_iou_spin, snapshot.segment_match_iou_thresh),
@@ -3245,6 +3284,8 @@ class MainWindow(QMainWindow):
         override_value = str(self.region_override_combo.currentData() or "")
         self.interaction_state.set_region_label_override(region_id, override_value)
         override_label = self.region_override_combo.currentText()
+        if self.region_refresh_callback is not None:
+            self.region_refresh_callback(region_id)
         if override_value:
             self.statusBar().showMessage(f"Region {region_id} override set to {override_label}", 3000)
         else:
@@ -3718,6 +3759,8 @@ class Worker(QObject):
         self.runtime_settings = runtime_settings
         self.interaction_state = interaction_state
         self.debug_console = debug_console
+        self._refresh_lock = Lock()
+        self._pending_region_refreshes = []
 
     def request_stop(self):
         self.stop_event.set()
@@ -3727,6 +3770,21 @@ class Worker(QObject):
             self.play_event.clear()
         else:
             self.play_event.set()
+
+    def request_region_refresh(self, region_id):
+        try:
+            region_id = int(region_id)
+        except (TypeError, ValueError):
+            return
+        with self._refresh_lock:
+            if region_id not in self._pending_region_refreshes:
+                self._pending_region_refreshes.append(region_id)
+
+    def drain_region_refreshes(self):
+        with self._refresh_lock:
+            pending = list(self._pending_region_refreshes)
+            self._pending_region_refreshes.clear()
+        return pending
 
     @Slot()
     def run(self):
@@ -3743,6 +3801,7 @@ class Worker(QObject):
                 pause_event=self.play_event,
                 vectorization_method=self.source_info.get("vectorization_method"),
                 equation_ocr_model=self.source_info.get("equation_ocr_model"),
+                refresh_request_getter=self.drain_region_refreshes,
             )
         except Exception:
             traceback.print_exc()
@@ -3780,6 +3839,7 @@ def run_gui(video_path: str | int | dict | None = None,enable_gui = True):
                     QMessageBox.information(None, "No Sources Found", "No video files or camera sources were found.")
                     return 0
                 picker = VideoSelectionDialog(source_options)
+                picker.showMaximized()
                 if picker.exec() != QDialog.Accepted or not picker.selected_source:
                     return 0
                 pending_video_source = picker.selected_source
@@ -3844,10 +3904,10 @@ def run_gui(video_path: str | int | dict | None = None,enable_gui = True):
             win.video_library_action.triggered.connect(return_to_video_library)
 
             if enable_gui:
-                win.show()
+                win.showMaximized()
                 exit_code = app.exec()
             else:
-                win.show()
+                win.showMaximized()
                 exit_code = app.exec()
 
             win.deleteLater()
@@ -3903,6 +3963,7 @@ def run_gui(video_path: str | int | dict | None = None,enable_gui = True):
                     )
                 preview_window = f"{current_source_name} Preview (Space to select corners)"
                 cv2.namedWindow(preview_window, cv2.WINDOW_NORMAL)
+                cv2.setWindowProperty(preview_window, cv2.WND_PROP_FULLSCREEN, cv2.WINDOW_FULLSCREEN)
                 first_frame = None
                 while True:
                     if first_preview_frame is not None:
@@ -4028,6 +4089,7 @@ def run_gui(video_path: str | int | dict | None = None,enable_gui = True):
         win.video_library_action.triggered.connect(return_to_video_library)
         win.reset_run_action.triggered.connect(reset_current_run)
         win.set_pause_toggle_callback(worker.set_paused)
+        win.set_region_refresh_callback(worker.request_region_refresh)
         if start_paused:
             win.set_playback_paused(True, initial_start=True, sync_canvas_queue=False)
         else:
@@ -4035,7 +4097,7 @@ def run_gui(video_path: str | int | dict | None = None,enable_gui = True):
 
         thread.start()
         if enable_gui:
-            win.show()
+            win.showMaximized()
             exit_code = app.exec()
         else:
             thread.finished.connect(app.quit)

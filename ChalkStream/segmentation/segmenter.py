@@ -348,9 +348,15 @@ class Segmenter:
 
             boxes.append((x, y, bw, bh))
 
-        return self._merge_candidate_boxes(boxes)
+        merge_gap_x = max(3, int(round(w * self.close_kernel_width_frac)))
+        merge_gap_y = max(3, int(round(h * self.close_kernel_height_frac)))
+        return self._merge_candidate_boxes(
+            boxes,
+            proximity_x=merge_gap_x,
+            proximity_y=merge_gap_y,
+        )
 
-    def _merge_candidate_boxes(self, boxes):
+    def _merge_candidate_boxes(self, boxes, proximity_x=0, proximity_y=0):
         if len(boxes) < 2:
             return boxes
 
@@ -373,22 +379,39 @@ class Segmenter:
             return (x1, y1, x2 - x1, y2 - y1)
 
         def should_merge(box_a, box_b):
+            ax, ay, aw, ah = map(int, box_a)
+            bx, by, bw, bh = map(int, box_b)
             inter = intersection_area(box_a, box_b)
-            if inter <= 0:
-                return False
+            if inter > 0:
+                area_a = max(1, int(box_a[2]) * int(box_a[3]))
+                area_b = max(1, int(box_b[2]) * int(box_b[3]))
+                overlap_over_min = inter / float(min(area_a, area_b))
+                area_ratio = min(area_a, area_b) / float(max(area_a, area_b))
 
-            area_a = max(1, int(box_a[2]) * int(box_a[3]))
-            area_b = max(1, int(box_b[2]) * int(box_b[3]))
-            overlap_over_min = inter / float(min(area_a, area_b))
-            area_ratio = min(area_a, area_b) / float(max(area_a, area_b))
+                if overlap_over_min >= BOX_MERGE_CONTAINMENT_MIN:
+                    return True
 
-            if overlap_over_min >= BOX_MERGE_CONTAINMENT_MIN:
+                return (
+                    overlap_over_min >= BOX_MERGE_OVERLAP_MIN
+                    and area_ratio >= BOX_MERGE_AREA_RATIO_MIN
+                )
+
+            horizontal_gap = max(0, max(bx - (ax + aw), ax - (bx + bw)))
+            vertical_gap = max(0, max(by - (ay + ah), ay - (by + bh)))
+            overlap_x = max(0, min(ax + aw, bx + bw) - max(ax, bx))
+            overlap_y = max(0, min(ay + ah, by + bh) - max(ay, by))
+            min_w = max(1, min(aw, bw))
+            min_h = max(1, min(ah, bh))
+
+            horizontally_aligned = overlap_y >= int(round(0.20 * min_h))
+            vertically_aligned = overlap_x >= int(round(0.20 * min_w))
+
+            if proximity_x > 0 and horizontal_gap <= proximity_x and horizontally_aligned:
+                return True
+            if proximity_y > 0 and vertical_gap <= proximity_y and vertically_aligned:
                 return True
 
-            return (
-                overlap_over_min >= BOX_MERGE_OVERLAP_MIN
-                and area_ratio >= BOX_MERGE_AREA_RATIO_MIN
-            )
+            return False
 
         merged = [tuple(map(int, box)) for box in boxes]
         changed = True
