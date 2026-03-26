@@ -32,6 +32,11 @@ _noise_settings = {
     "var_threshold": DEFAULT_PREPROCESS_VAR_THRESHOLD,
 }
 
+previous_frame = None
+mp_selfie_segmentation = mp.solutions.selfie_segmentation.SelfieSegmentation(model_selection=0)
+alpha = 0.3
+blend = 0.1
+
 
 def _create_background_subtractor(history, var_threshold):
     """Create the background subtractor used to suppress transient motion."""
@@ -72,6 +77,28 @@ def _ensure_background_subtractor(settings_snapshot=None):
     return fgbg
 
 
+# def noise_removal(frame, settings_snapshot=None):
+#     #filter out people
+#     rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+#     result = mp_selfie_segmentation.process(rgb)
+#     mask = cv2.bitwise_not((result.segmentation_mask > 0.4).astype('uint8') * 255)
+#     kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (18,18))
+#     shrunk_mask = cv2.erode(mask, kernel, iterations=1)
+#     people_filtered = cv2.bitwise_and(frame, frame, mask=shrunk_mask)
+
+#     #filter out movements
+#     fgmask = _ensure_background_subtractor(settings_snapshot).apply(people_filtered)
+#     kernel2 = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (18,18))
+#     shrunk_mask2 = cv2.dilate(fgmask, kernel2, iterations=1)
+#     bgmask = cv2.bitwise_not(shrunk_mask2)
+#     movement_filtered = cv2.bitwise_and(people_filtered, people_filtered, mask=bgmask)
+
+#     filtered_out_area = cv2.bitwise_or(shrunk_mask2,cv2.bitwise_not(shrunk_mask))
+#     filtered_out_area = cv2.cvtColor(filtered_out_area, cv2.COLOR_GRAY2BGR)
+
+#     final_image = cv2.bitwise_or(movement_filtered,cv2.bitwise_and(noise_removal.previous_frame,filtered_out_area))
+#     noise_removal.previous_frame = final_image
+#     return final_image
 def noise_removal(frame, settings_snapshot=None):
     """Remove people and motion while keeping the most recent stable board state."""
     # Mask out people first so they do not pollute the board image.
@@ -95,11 +122,12 @@ def noise_removal(frame, settings_snapshot=None):
     bgmask = cv2.bitwise_not(shrunk_mask2)
     movement_filtered = cv2.bitwise_and(people_filtered, people_filtered, mask=bgmask)
 
-    filtered_out_area = cv2.bitwise_or(shrunk_mask2,cv2.bitwise_not(shrunk_mask))
+    #combine
+    filtered_out_area = cv2.bitwise_or(fgmask,cv2.bitwise_not(shrunk_mask))
     filtered_out_area = cv2.cvtColor(filtered_out_area, cv2.COLOR_GRAY2BGR)
 
     final_image = cv2.bitwise_or(movement_filtered,cv2.bitwise_and(noise_removal.previous_frame,filtered_out_area))
-    noise_removal.previous_frame = final_image
+    noise_removal.previous_frame = final_image.copy()
     return final_image
 
 def grey_scale(frame):
