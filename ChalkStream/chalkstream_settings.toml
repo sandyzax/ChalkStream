@@ -14,10 +14,10 @@ history = 50
 var_threshold = 25.0
 
 # MediaPipe person-mask threshold. Lower values include more pixels in the person mask.
-person_mask_threshold = 0.4
+person_mask_threshold = 0.25
 
 # Erosion kernel used to shrink the person mask before compositing the board back in.
-person_mask_erosion_kernel = 18
+person_mask_erosion_kernel = 12
 
 # Dilation kernel used to expand the motion mask before restoring the previous board state.
 motion_mask_dilation_kernel = 18

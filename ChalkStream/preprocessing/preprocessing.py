@@ -122,8 +122,11 @@ def noise_removal(frame, settings_snapshot=None):
     bgmask = cv2.bitwise_not(shrunk_mask2)
     movement_filtered = cv2.bitwise_and(people_filtered, people_filtered, mask=bgmask)
 
-    #combine
-    filtered_out_area = cv2.bitwise_or(fgmask,cv2.bitwise_not(shrunk_mask))
+    # Restore from the last stable board anywhere we removed either a person pixel
+    # or a motion pixel. This needs to use the same dilated motion mask that drove
+    # bgmask above, otherwise the removed area and restored area do not line up and
+    # black speckle artifacts leak through around the professor silhouette.
+    filtered_out_area = cv2.bitwise_or(shrunk_mask2, cv2.bitwise_not(shrunk_mask))
     filtered_out_area = cv2.cvtColor(filtered_out_area, cv2.COLOR_GRAY2BGR)
 
     final_image = cv2.bitwise_or(movement_filtered,cv2.bitwise_and(noise_removal.previous_frame,filtered_out_area))
