@@ -66,11 +66,13 @@ from core import (
     camera_resolution_label,
     discover_saved_boards,
     ensure_app_settings_file,
+    get_source_settings,
     load_board_document,
     load_app_settings,
     open_camera_capture,
     open_configured_camera_capture,
     save_board_document,
+    save_source_settings,
 )
 from diagram_vectorization.vectorization import (
     DEFAULT_VECTORIZATION_METHOD,
@@ -129,6 +131,7 @@ EQUATION_OCR_MODEL_OPTIONS = (
     ("Trained_VX", "Trained_VX"),
 )
 DEFAULT_EQUATION_OCR_MODEL = str(ORCHESTRATION_SETTINGS.get("equation_ocr_model", "Trained_V3"))
+DEFAULT_HANDWRITING_PROXIMITY = 0.025
 
 
 def cv2_to_qpixmap(cv_img):
@@ -224,6 +227,24 @@ def render_plain_text_pixmap(text, pixel_size=24):
     return pixmap
 
 
+def add_pixmap_padding(pixmap, padding):
+    if pixmap.isNull():
+        return pixmap
+
+    padding = max(0, int(padding))
+    if padding == 0:
+        return pixmap
+
+    padded = QPixmap(pixmap.width() + padding * 2, pixmap.height() + padding * 2)
+    padded.fill(Qt.transparent)
+
+    painter = QPainter(padded)
+    painter.setRenderHint(QPainter.SmoothPixmapTransform)
+    painter.drawPixmap(padding, padding, pixmap)
+    painter.end()
+    return padded
+
+
 def render_mathtext_pixmap(expr, size=16):
     expr = str(expr or "").strip()
     if not expr:
@@ -235,11 +256,11 @@ def render_mathtext_pixmap(expr, size=16):
     fig.text(0, 0, f"${expr}$")
 
     buffer = io.BytesIO()
-    fig.savefig(buffer, format="png", bbox_inches="tight", pad_inches=0, transparent=True)
+    fig.savefig(buffer, format="png", bbox_inches="tight", pad_inches=0.03, transparent=True)
 
     pixmap = QPixmap()
     pixmap.loadFromData(buffer.getvalue())
-    return pixmap
+    return add_pixmap_padding(pixmap, max(2, int(size * 0.2)))
 
 
 def render_expression_pixmap(expr, size=16):
@@ -470,6 +491,56 @@ def proximity_slider_value_to_label(value):
     return f"{display_value:.1f}"
 
 
+def normalize_handwriting_proximity_fraction(value, default=DEFAULT_HANDWRITING_PROXIMITY):
+    try:
+        fraction = float(value)
+    except (TypeError, ValueError):
+        fraction = float(default)
+    return max(0.01, min(0.15, fraction))
+
+
+def handwriting_proximity_fraction_to_display(value):
+    return round(normalize_handwriting_proximity_fraction(value) * 100.0, 1)
+
+
+def handwriting_proximity_display_to_fraction(value):
+    try:
+        display_value = float(value)
+    except (TypeError, ValueError):
+        display_value = DEFAULT_HANDWRITING_PROXIMITY * 100.0
+    return normalize_handwriting_proximity_fraction(display_value / 100.0)
+
+
+def with_saved_source_settings(source):
+    normalized_source = dict(source or {})
+    normalized_source.update(get_source_settings(normalized_source))
+    return normalized_source
+
+
+def build_source_runtime_settings(source):
+    normalized_source = with_saved_source_settings(source)
+    return {
+        "text_ocr_backend": str(
+            normalized_source.get("text_ocr_backend", DEFAULT_TEXT_OCR_BACKEND)
+        ).strip().lower(),
+        "text_ocr_model": str(
+            normalized_source.get("text_ocr_model", DEFAULT_TEXT_OCR_MODEL)
+        ),
+        "vectorization_method": normalize_vectorization_method(
+            normalized_source.get("vectorization_method", DEFAULT_VECTORIZATION_SELECTION)
+        ),
+        "equation_ocr_model": str(
+            normalized_source.get("equation_ocr_model", DEFAULT_EQUATION_OCR_MODEL)
+        ),
+        "segment_kernel_width_frac": normalize_handwriting_proximity_fraction(
+            normalized_source.get("segment_kernel_width_frac", DEFAULT_HANDWRITING_PROXIMITY)
+        ),
+        "segment_kernel_height_frac": normalize_handwriting_proximity_fraction(
+            normalized_source.get("segment_kernel_height_frac", DEFAULT_HANDWRITING_PROXIMITY)
+        ),
+    }
+
+
 def build_selection_metadata_text(metadata):
     if not metadata:
         return "Select a region to inspect metadata."
@@ -694,7 +765,7 @@ def normalize_video_source(source):
 
 
 def with_default_run_options(source):
-    normalized_source = dict(source or {})
+    normalized_source = with_saved_source_settings(source)
     normalized_source["text_ocr_backend"] = str(
         normalized_source.get("text_ocr_backend", DEFAULT_TEXT_OCR_BACKEND)
     ).strip().lower()
@@ -706,6 +777,12 @@ def with_default_run_options(source):
     )
     normalized_source["equation_ocr_model"] = str(
         normalized_source.get("equation_ocr_model", DEFAULT_EQUATION_OCR_MODEL)
+    )
+    normalized_source["segment_kernel_width_frac"] = normalize_handwriting_proximity_fraction(
+        normalized_source.get("segment_kernel_width_frac", DEFAULT_HANDWRITING_PROXIMITY)
+    )
+    normalized_source["segment_kernel_height_frac"] = normalize_handwriting_proximity_fraction(
+        normalized_source.get("segment_kernel_height_frac", DEFAULT_HANDWRITING_PROXIMITY)
     )
     return normalized_source
 
@@ -744,6 +821,110 @@ def source_display_name(source):
     if source_kind == "board":
         return str(source.get("name") or "Saved Board")
     return str(source.get("name") or Path(str(source.get("value"))).name)
+
+
+class SourceRowWidget(QWidget):
+    def __init__(self, source, on_change, parent=None):
+        super().__init__(parent)
+        self._source = with_default_run_options(source)
+        self._on_change = on_change
+
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(10, 8, 10, 8)
+        layout.setSpacing(12)
+
+        text_layout = QVBoxLayout()
+        text_layout.setContentsMargins(0, 0, 0, 0)
+        text_layout.setSpacing(2)
+        layout.addLayout(text_layout, 1)
+
+        self.title_label = QLabel()
+        title_font = QFont(self.title_label.font())
+        title_font.setBold(True)
+        self.title_label.setFont(title_font)
+        text_layout.addWidget(self.title_label)
+
+        self.subtitle_label = QLabel()
+        self.subtitle_label.setWordWrap(True)
+        self.subtitle_label.setStyleSheet("color: #5b6472;")
+        text_layout.addWidget(self.subtitle_label)
+
+        self.controls_widget = QWidget()
+        controls_layout = QHBoxLayout(self.controls_widget)
+        controls_layout.setContentsMargins(0, 0, 0, 0)
+        controls_layout.setSpacing(6)
+
+        controls_layout.addWidget(QLabel("H"))
+        self.width_spin = QDoubleSpinBox()
+        self.width_spin.setRange(1.0, 15.0)
+        self.width_spin.setDecimals(1)
+        self.width_spin.setSingleStep(0.5)
+        self.width_spin.setFixedWidth(90)
+        self.width_spin.setAlignment(Qt.AlignRight)
+        self.width_spin.valueChanged.connect(self._on_spin_changed)
+        controls_layout.addWidget(self.width_spin)
+
+        controls_layout.addWidget(QLabel("V"))
+        self.height_spin = QDoubleSpinBox()
+        self.height_spin.setRange(1.0, 15.0)
+        self.height_spin.setDecimals(1)
+        self.height_spin.setSingleStep(0.5)
+        self.height_spin.setFixedWidth(90)
+        self.height_spin.setAlignment(Qt.AlignRight)
+        self.height_spin.valueChanged.connect(self._on_spin_changed)
+        controls_layout.addWidget(self.height_spin)
+
+        self.controls_hint_label = QLabel("Handwriting proximity")
+        self.controls_hint_label.setStyleSheet("color: #5b6472;")
+        controls_layout.addWidget(self.controls_hint_label)
+        layout.addWidget(self.controls_widget, 0)
+
+        self._refresh()
+
+    def _refresh(self):
+        source = self._source
+        kind = str(source.get("kind") or "").strip().lower()
+
+        if kind == "board":
+            dimensions = ""
+            if int(source.get("width", 0) or 0) > 0 and int(source.get("height", 0) or 0) > 0:
+                dimensions = f"{int(source['width'])}x{int(source['height'])}"
+            saved_at = str(source.get("saved_at") or "").strip()
+            subtitle_parts = [part for part in (dimensions, saved_at) if part]
+            self.title_label.setText(str(source.get("name") or "Saved Board"))
+            self.subtitle_label.setText("  •  ".join(subtitle_parts) or str(source.get("relative_path") or ""))
+            self.controls_widget.setVisible(False)
+            return
+
+        if kind == "camera":
+            subtitle = str(source.get("relative_path") or f"Live camera feed (device {int(source.get('value', 0) or 0)})")
+        else:
+            badge = "Preferred Library" if source.get("preferred") else "Legacy Folder"
+            subtitle = f"{source.get('relative_path', '')}  •  {humanize_bytes(source.get('size'))}  •  {badge}"
+
+        self.title_label.setText(source_display_name(source))
+        self.subtitle_label.setText(subtitle)
+        self.controls_widget.setVisible(True)
+
+        self.width_spin.blockSignals(True)
+        self.width_spin.setValue(handwriting_proximity_fraction_to_display(source.get("segment_kernel_width_frac")))
+        self.width_spin.blockSignals(False)
+
+        self.height_spin.blockSignals(True)
+        self.height_spin.setValue(handwriting_proximity_fraction_to_display(source.get("segment_kernel_height_frac")))
+        self.height_spin.blockSignals(False)
+
+    def current_source(self):
+        source = dict(self._source)
+        if str(source.get("kind") or "").strip().lower() != "board":
+            source["segment_kernel_width_frac"] = handwriting_proximity_display_to_fraction(self.width_spin.value())
+            source["segment_kernel_height_frac"] = handwriting_proximity_display_to_fraction(self.height_spin.value())
+        return source
+
+    def _on_spin_changed(self, _value):
+        self._source = self.current_source()
+        if callable(self._on_change):
+            self._on_change(self)
 
 
 class VideoSelectionDialog(QDialog):
@@ -842,6 +1023,39 @@ class VideoSelectionDialog(QDialog):
         source_with_options = dict(source or {})
         source_with_options.update(self._current_run_options())
         return source_with_options
+
+    def _current_row_source(self):
+        current_item = self.browser_list.currentItem() if hasattr(self, "browser_list") else None
+        if current_item is None:
+            return None
+        source = current_item.data(Qt.UserRole)
+        row_widget = self.browser_list.itemWidget(current_item)
+        if isinstance(row_widget, SourceRowWidget):
+            source = row_widget.current_source()
+        return with_default_run_options(source)
+
+    def _on_row_handwriting_proximity_changed(self, row_widget):
+        source = row_widget.current_source()
+        if str(source.get("kind") or "").strip().lower() != "board":
+            save_source_settings(
+                source,
+                {
+                    "segment_kernel_width_frac": source.get("segment_kernel_width_frac", DEFAULT_HANDWRITING_PROXIMITY),
+                    "segment_kernel_height_frac": source.get("segment_kernel_height_frac", DEFAULT_HANDWRITING_PROXIMITY),
+                },
+            )
+        current_item = None
+        if hasattr(self, "browser_list"):
+            for index in range(self.browser_list.count()):
+                candidate = self.browser_list.item(index)
+                if self.browser_list.itemWidget(candidate) is row_widget:
+                    current_item = candidate
+                    break
+        if current_item is not None and self.browser_list.currentItem() is not current_item:
+            self.browser_list.setCurrentItem(current_item)
+        if current_item is not None:
+            self.selected_source = self._apply_run_options_to_source(source)
+            self.update_details(current_item, None)
 
     def _refresh_selected_source_details(self):
         current_item = self.browser_list.currentItem() if hasattr(self, "browser_list") else None
@@ -993,21 +1207,13 @@ class VideoSelectionDialog(QDialog):
             sources = self.board_sources
 
         for source in sources:
-            if source["kind"] == "board":
-                dimensions = ""
-                if int(source.get("width", 0) or 0) > 0 and int(source.get("height", 0) or 0) > 0:
-                    dimensions = f"  •  {int(source['width'])}x{int(source['height'])}"
-                saved_at = f"  •  {source['saved_at']}" if source.get("saved_at") else ""
-                label = f"{source['name']}{dimensions}{saved_at}"
-            elif source["kind"] == "camera":
-                label = f"{source['name']}  -  {source['relative_path']}"
-            else:
-                badge = "Preferred Library" if source["preferred"] else "Legacy Folder"
-                label = f"{source['name']}  •  {humanize_bytes(source['size'])}  •  {badge}"
-            item = QListWidgetItem(label)
+            item = QListWidgetItem()
             item.setData(Qt.UserRole, source)
             item.setToolTip(source["relative_path"])
             self.browser_list.addItem(item)
+            row_widget = SourceRowWidget(source, self._on_row_handwriting_proximity_changed, self.browser_list)
+            item.setSizeHint(row_widget.sizeHint())
+            self.browser_list.setItemWidget(item, row_widget)
 
         if self.browser_list.count() > 0:
             self.browser_list.setCurrentRow(0)
@@ -1027,13 +1233,13 @@ class VideoSelectionDialog(QDialog):
             QMessageBox.information(self, "Camera Unavailable", "No camera source is configured.")
             return
         if len(self.camera_sources) == 1:
-            self.selected_source = self._apply_run_options_to_source(self.camera_sources[0])
+            self.selected_source = self._apply_run_options_to_source(with_default_run_options(self.camera_sources[0]))
             self.accept()
             return
         self._show_source_browser("camera")
 
     def update_details(self, current, _previous):
-        source = current.data(Qt.UserRole) if current is not None else None
+        source = self._current_row_source() if current is not None else None
         self.start_button.setEnabled(source is not None)
         if source is None:
             self.details_label.setText("Select an item to inspect its details.")
@@ -1046,6 +1252,8 @@ class VideoSelectionDialog(QDialog):
             f"Text OCR model: {self.text_ocr_model_combo.currentText()}\n"
             f"Diagram vectorization: {self.vectorization_method_combo.currentText()}\n"
             f"Equation OCR model: {self.equation_model_combo.currentText()}\n"
+            f"Horizontal handwriting proximity: {handwriting_proximity_fraction_to_display(source.get('segment_kernel_width_frac')):.1f}\n"
+            f"Vertical handwriting proximity: {handwriting_proximity_fraction_to_display(source.get('segment_kernel_height_frac')):.1f}\n"
         )
         if source["kind"] == "board":
             dimensions = ""
@@ -1074,9 +1282,10 @@ class VideoSelectionDialog(QDialog):
             )
 
     def accept_selection(self):
-        if self.selected_source is None:
+        source = self._current_row_source() or self.selected_source
+        if source is None:
             return
-        self.selected_source = self._apply_run_options_to_source(self.selected_source)
+        self.selected_source = self._apply_run_options_to_source(source)
         self.accept()
 
 
@@ -2422,13 +2631,15 @@ class MainWindow(QMainWindow):
         self.interaction_state = interaction_state or InteractionStateStore()
         self.runtime_settings_visible = False
         self.selection_metadata_visible = True
-        self.source_info = dict(source_info or {})
+        self.source_info = with_default_run_options(source_info)
         self.editor_only = bool(editor_only)
         self.playback_paused = False
         self.playback_started = True
         self.pause_toggle_callback = None
         self.current_board_path = None
         self.current_board_name = None
+        self.right_sidebar_visible = True
+        self._right_sidebar_width = 360
 
         self.setWindowTitle("Board")
         self.setWindowState(self.windowState() | Qt.WindowMaximized)
@@ -2696,9 +2907,10 @@ class MainWindow(QMainWindow):
         sidebar_scroll.setMinimumWidth(340)
         sidebar_scroll.setMaximumWidth(440)
         sidebar_scroll.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Expanding)
+        self.sidebar_scroll = sidebar_scroll
 
         self.main_splitter = QSplitter(Qt.Horizontal)
-        self.main_splitter.setChildrenCollapsible(False)
+        self.main_splitter.setChildrenCollapsible(True)
         self.main_splitter.setHandleWidth(10)
         self.main_splitter.addWidget(self.display_container)
         self.main_splitter.addWidget(sidebar_scroll)
@@ -2721,6 +2933,7 @@ class MainWindow(QMainWindow):
         self.apply_view_selection_layout()
         self._apply_editor_only_mode()
         self._update_playback_button_state()
+        self._update_right_sidebar_toggle_ui()
         self.statusBar().showMessage("Ready")
 
     def _setup_menu_bar(self):
@@ -2774,6 +2987,11 @@ class MainWindow(QMainWindow):
         view_menu = self.menuBar().addMenu("&View")
         for key in ("canvas", "original", "filtered"):
             view_menu.addAction(self.view_mode_actions[key])
+        view_menu.addSeparator()
+        self.toggle_right_sidebar_action = QAction("Hide Right Menu", self)
+        self.toggle_right_sidebar_action.setShortcut("Ctrl+]")
+        self.toggle_right_sidebar_action.triggered.connect(self.toggle_right_sidebar)
+        view_menu.addAction(self.toggle_right_sidebar_action)
 
         run_menu = self.menuBar().addMenu("&Run")
         self.pause_action = QAction("Pause", self)
@@ -2870,6 +3088,48 @@ class MainWindow(QMainWindow):
         self.shortcuts_action.triggered.connect(self.show_shortcuts_dialog)
         help_menu.addAction(self.shortcuts_action)
 
+        self.right_sidebar_toggle_button = QToolButton(self)
+        self.right_sidebar_toggle_button.clicked.connect(self.toggle_right_sidebar)
+        self.menuBar().setCornerWidget(self.right_sidebar_toggle_button, Qt.TopRightCorner)
+
+    def _update_right_sidebar_toggle_ui(self):
+        visible = bool(getattr(self, "right_sidebar_visible", True))
+        button_text = "Hide Right Menu" if visible else "Show Right Menu"
+        if hasattr(self, "right_sidebar_toggle_button"):
+            self.right_sidebar_toggle_button.setText(button_text)
+            self.right_sidebar_toggle_button.setToolButtonStyle(Qt.ToolButtonTextOnly)
+        if hasattr(self, "toggle_right_sidebar_action"):
+            self.toggle_right_sidebar_action.setText(button_text)
+
+    def set_right_sidebar_visible(self, visible):
+        visible = bool(visible)
+        if not hasattr(self, "sidebar_scroll") or not hasattr(self, "main_splitter"):
+            self.right_sidebar_visible = visible
+            self._update_right_sidebar_toggle_ui()
+            return
+
+        if visible == self.right_sidebar_visible:
+            self._update_right_sidebar_toggle_ui()
+            return
+
+        if not visible:
+            sizes = self.main_splitter.sizes()
+            if len(sizes) > 1 and sizes[1] > 0:
+                self._right_sidebar_width = sizes[1]
+            self.sidebar_scroll.hide()
+            self.main_splitter.setSizes([max(1, self.main_splitter.width()), 0])
+        else:
+            self.sidebar_scroll.show()
+            restored_width = max(340, int(getattr(self, "_right_sidebar_width", 360)))
+            total_width = max(restored_width + 320, self.main_splitter.width())
+            self.main_splitter.setSizes([max(320, total_width - restored_width), restored_width])
+
+        self.right_sidebar_visible = visible
+        self._update_right_sidebar_toggle_ui()
+
+    def toggle_right_sidebar(self):
+        self.set_right_sidebar_visible(not self.right_sidebar_visible)
+
     def show_shortcuts_dialog(self):
         QMessageBox.information(
             self,
@@ -2882,6 +3142,7 @@ class MainWindow(QMainWindow):
                 "Space: Pause or resume",
                 "Ctrl+R: Reset the current run",
                 "Ctrl+L: Return to video library",
+                "Ctrl+]: Show or hide the right menu",
             ]),
         )
 
@@ -3087,9 +3348,11 @@ class MainWindow(QMainWindow):
         if axis == "width":
             self.kernel_width_value_label.setText(proximity_slider_value_to_label(slider_value))
             self.runtime_settings.update(segment_kernel_width_frac=fraction)
+            self.source_info["segment_kernel_width_frac"] = fraction
         else:
             self.kernel_height_value_label.setText(proximity_slider_value_to_label(slider_value))
             self.runtime_settings.update(segment_kernel_height_frac=fraction)
+            self.source_info["segment_kernel_height_frac"] = fraction
 
     def _load_runtime_settings_into_controls(self):
         snapshot = self.runtime_settings.snapshot()
@@ -3868,6 +4131,10 @@ def run_gui(video_path: str | int | dict | None = None,enable_gui = True):
                     continue
                 raise
 
+            board_source_info = with_default_run_options(
+                board_document.get("source_info") or current_video_source
+            )
+            runtime_settings.update(**build_source_runtime_settings(board_source_info))
             apply_interaction_state_snapshot(interaction_state, board_document.get("interaction_state"))
             board_width, board_height = infer_board_dimensions(
                 board_document.get("width"),
@@ -3881,7 +4148,7 @@ def run_gui(video_path: str | int | dict | None = None,enable_gui = True):
                 int(board_height),
                 runtime_settings=runtime_settings,
                 interaction_state=interaction_state,
-                source_info=board_document.get("source_info") or current_video_source,
+                source_info=board_source_info,
                 editor_only=True,
                 original_frame=board_document.get("original_frame"),
             )
@@ -3922,16 +4189,7 @@ def run_gui(video_path: str | int | dict | None = None,enable_gui = True):
             break
 
         current_capture_value = source_capture_value(current_video_source)
-        runtime_settings.update(
-            text_ocr_backend=current_video_source.get("text_ocr_backend", DEFAULT_TEXT_OCR_BACKEND),
-            text_ocr_model=current_video_source.get("text_ocr_model", DEFAULT_TEXT_OCR_MODEL),
-            vectorization_method=current_video_source.get("vectorization_method", DEFAULT_VECTORIZATION_SELECTION),
-            equation_ocr_model=current_video_source.get("equation_ocr_model", DEFAULT_EQUATION_OCR_MODEL),
-        )
-        if current_video_source["kind"] == "camera":
-            runtime_settings.update(segment_kernel_width_frac=0.05)
-        else:
-            runtime_settings.update(segment_kernel_width_frac=0.025)
+        runtime_settings.update(**build_source_runtime_settings(current_video_source))
 
         if pending_corners is None or pending_dimensions is None:
             if current_video_source["kind"] == "camera":

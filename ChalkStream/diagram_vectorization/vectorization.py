@@ -32,7 +32,7 @@ VECTORIZATION_METHOD_OPTIONS = (
     ("v1", "Vectorization V1"),
     ("v2", "Vectorization V2"),
 )
-DEFAULT_VECTORIZATION_METHOD = "v1"
+DEFAULT_VECTORIZATION_METHOD = "v2"
 
 
 def normalize_vectorization_method(method):

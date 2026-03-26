@@ -7,7 +7,7 @@ BOARD_ASPECT_RATIO_OPTIONS = (
     (16.0, 9.0),
     (3.0, 2.0),
 )
-AUTO_DETECT_CORNER_INSET_FRAC = 0.015
+AUTO_DETECT_CORNER_INSET_FRAC = 0.02
 
 
 def auto_detect_board_corners(bgr):

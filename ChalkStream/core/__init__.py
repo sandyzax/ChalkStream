@@ -18,6 +18,11 @@ from .camera_utils import (
 from .interaction_state import InteractionStateStore
 from .run_console import RunConsole
 from .runtime_settings import RuntimeSettingsSnapshot, RuntimeSettingsStore
+from .source_settings import (
+    SOURCE_SETTINGS_PATH,
+    get_source_settings,
+    save_source_settings,
+)
 
 __all__ = [
     "APP_SETTINGS_PATH",
@@ -36,5 +41,8 @@ __all__ = [
     "RunConsole",
     "RuntimeSettingsSnapshot",
     "RuntimeSettingsStore",
+    "SOURCE_SETTINGS_PATH",
+    "get_source_settings",
     "save_board_document",
+    "save_source_settings",
 ]

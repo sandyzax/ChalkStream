@@ -194,7 +194,7 @@ equation_ocr_max_gen_length = 128
 equation_ocr_num_beams = 1
 
 # Diagram vectorization method used for diagram and fallback math rendering.
-diagram_vectorization_method = "v1"
+diagram_vectorization_method = "v2"
 
 # Minimum time between segmentation passes.
 segment_interval_s = 0.5
@@ -280,7 +280,7 @@ def _default_settings_dict():
             "equation_ocr_timeout_s": 120.0,
             "equation_ocr_max_gen_length": 128,
             "equation_ocr_num_beams": 1,
-            "diagram_vectorization_method": "v1",
+            "diagram_vectorization_method": "v2",
             "segment_interval_s": 0.5,
             "preview_interval_s": 0.1,
             "console_summary_interval_segments": 4,
