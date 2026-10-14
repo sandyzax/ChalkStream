@@ -1,7 +1,7 @@
 # ChalkStream-Capstone-Group62
 ChalkStream is a collaborative learning platform that uses computer vision and machine learning to capture lecture-board content in real time. The application processes handwritten text, mathematical expressions, and diagrams through an integrated pipeline of image processing, segmentation, and OCR components.
 
-Technologies
+# Technologies
 
 Language: Python
 
@@ -13,7 +13,7 @@ Text Recognition: Math OCR, TrOCR
 
 
 
-Key Features
+# Key Features
 
 Real-Time Processing: Integrates multiple processing stages to transform lecture-board content into digital representations.
 
@@ -29,7 +29,7 @@ Diagram Vectorization: Converts supported diagram content into vector representa
 
 Pipeline Orchestration: Coordinates processing components to produce integrated outputs.
 
-My Contributions
+# My Contributions
 
 Fine-tuned the microsoft/trocr-base-handwritten model for handwritten text recognition.
 
@@ -39,14 +39,12 @@ Evaluated recognition performance using character error rate (CER), word error r
 
 Collaborated with the team on integrating and evaluating the overall application.
 
-Evaluation
+# Evaluation
 
 Handwriting recognition was evaluated using character error rate (CER), word error rate (WER), and accuracy metrics.
 
 
-Team
-
-Developed collaboratively as a university capstone project at Carleton University.
+# Team
 
 Contributor 1 — Cameron Bodkin-Dick
 
@@ -54,7 +52,7 @@ Contributor 2 — Sandy Alzabadani
 
 Contributor 3 — Eric Cui
 
-Acknowledgements
+# Acknowledgements
 
 Thanks to all project contributors and the creators of the open-source models, libraries, and datasets used in this project.
 
