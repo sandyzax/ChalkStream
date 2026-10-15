@@ -46,11 +46,11 @@ Handwriting recognition was evaluated using character error rate (CER), word err
 
 # Team
 
-Contributor 1 — Cameron Bodkin-Dick
+Cameron Bodkin-Dick
 
-Contributor 2 — Sandy Alzabadani
+Sandy Alzabadani
 
-Contributor 3 — Eric Cui
+Eric Cui
 
 # Acknowledgements
 
